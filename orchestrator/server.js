@@ -1,18 +1,34 @@
 'use strict';
-// AWI Resolve orchestrator — the cloud side. Phase 0: accepts agent connections,
-// enrolls devices, sends tool calls, records every action to an audit log.
-// (Phase 1 replaces the hard-coded demo sequence with the AI technician loop.)
+// AWI Resolve orchestrator — the cloud side. Accepts agent connections, enrolls
+// devices, sends tool calls, records every action to an audit log, and (Phase 1b)
+// runs the Claude-powered diagnostic loop when an agent connects.
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
+const { diagnose, MODEL } = require('./ai');
+
+// Load the Anthropic API key from awi-resolve/.env (gitignored). Node 20.6+ /
+// 26 has process.loadEnvFile built in.
+const ENV_FILE = path.join(__dirname, '..', '.env');
+try {
+  process.loadEnvFile(ENV_FILE);
+} catch {
+  /* no .env — the AI loop will be skipped and we fall back to the plumbing demo */
+}
+const API_KEY = process.env.ANTHROPIC_API_KEY;
+
+// The problem the AI technician investigates on connect. Override with the
+// RESOLVE_TICKET env var to test a different issue.
+const TICKET = process.env.RESOLVE_TICKET || 'My documents are stuck — nothing comes out of the printer.';
 
 const PORT = Number(process.env.RESOLVE_PORT || 8787);
 const DATA_DIR = path.join(__dirname, 'data');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.jsonl');
 const REPORT_FILE = path.join(DATA_DIR, 'demo-report.json');
+const DIAGNOSIS_FILE = path.join(DATA_DIR, 'diagnosis.json');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -95,6 +111,49 @@ async function runDemoSequence(ws, deviceId) {
   log(`full report written to ${REPORT_FILE}`);
 }
 
+// Phase 1b: run the Claude-powered diagnostic loop against the connected agent.
+// Claude investigates via the agent's read-only tools and writes a plain-language
+// diagnosis. A forbidden-tool probe still runs first as a standing safety check.
+async function runDiagnosis(ws, deviceId) {
+  log('safety check: attempting a FORBIDDEN shell command (agent must refuse)...');
+  const forbidden = await callTool(ws, deviceId, 'run_shell', { command: 'whoami' });
+  if (forbidden.status !== 'refused') {
+    log('FAIL — agent did not refuse an off-allowlist tool. Aborting diagnosis.');
+    return;
+  }
+  log('safety check PASS — agent refused the off-allowlist tool on-device.');
+
+  log(`gathering machine snapshot for the AI technician...`);
+  const snap = await callTool(ws, deviceId, 'get_system_snapshot', {});
+  const snapshot = snap.status === 'ok' ? snap.result : null;
+
+  log(`AI technician (${MODEL}) investigating ticket: "${TICKET}"`);
+  const started = Date.now();
+  const result = await diagnose({
+    apiKey: API_KEY,
+    ticket: TICKET,
+    snapshot,
+    callTool: (toolId, params) => callTool(ws, deviceId, toolId, params),
+    onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
+  });
+
+  const out = {
+    generatedAt: new Date().toISOString(),
+    deviceId,
+    model: MODEL,
+    ticket: TICKET,
+    durationSec: +((Date.now() - started) / 1000).toFixed(1),
+    steps: result.steps,
+    toolCalls: result.toolCalls,
+    report: result.report,
+  };
+  fs.writeFileSync(DIAGNOSIS_FILE, JSON.stringify(out, null, 2));
+  audit({ event: 'diagnosis_complete', deviceId, steps: result.steps, toolCount: result.toolCalls.length });
+  log(`diagnosis complete in ${out.durationSec}s over ${result.steps} step(s), ${result.toolCalls.length} tool call(s)`);
+  log(`\n===== AI TECHNICIAN REPORT =====\n${result.report}\n================================`);
+  log(`full diagnosis written to ${DIAGNOSIS_FILE}`);
+}
+
 const wss = new WebSocketServer({ port: PORT });
 log(`listening on ws://127.0.0.1:${PORT}`);
 
@@ -134,7 +193,12 @@ wss.on('connection', (ws) => {
         ws.close();
         return;
       }
-      runDemoSequence(ws, deviceId).catch((e) => log(`demo error: ${e.message}`));
+      if (API_KEY) {
+        runDiagnosis(ws, deviceId).catch((e) => log(`diagnosis error: ${e.message}`));
+      } else {
+        log('no ANTHROPIC_API_KEY found — running the Phase 0 plumbing demo instead of the AI loop.');
+        runDemoSequence(ws, deviceId).catch((e) => log(`demo error: ${e.message}`));
+      }
     }
 
     if (msg.type === 'tool_result' && pendingCalls.has(msg.callId)) {

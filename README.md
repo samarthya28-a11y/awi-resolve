@@ -35,8 +35,18 @@ node agent/agent.js               (terminal 2 — the "customer PC")
 The orchestrator automatically runs a demo sequence when the agent connects and writes
 the result to `orchestrator/data/demo-report.json`.
 
+## Phase 1b (AI technician) ✅
+
+The orchestrator now runs a Claude-powered diagnostic loop (`orchestrator/ai.js`) when
+an agent connects: Claude reads the ticket + machine snapshot, calls the agent's Tier-0
+tools to investigate, and writes a plain-language diagnosis to
+`orchestrator/data/diagnosis.json`. Diagnosis only — it cannot apply fixes yet.
+
+Needs `ANTHROPIC_API_KEY` in `.env` (gitignored). Without it, the orchestrator falls
+back to the Phase 0 plumbing demo. Set a different problem to investigate with the
+`RESOLVE_TICKET` env var.
+
 ## Next phases (spec §11)
 
-1. **Phase 1** — AI diagnostic loop: Claude reads a ticket, runs Tier-0 tools, produces a diagnosis.
-2. **Phase 2** — Consent UI + Tier-2 fixes + chat window (tray app the customer sees).
-3. **Phase 3** — Pilot with 2–3 Gespage customers.
+1. **Phase 2** — Consent UI + Tier-2 fixes + chat window (tray app the customer sees).
+2. **Phase 3** — Pilot with 2–3 Gespage customers.

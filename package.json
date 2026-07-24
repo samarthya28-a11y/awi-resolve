@@ -8,6 +8,7 @@
     "agent": "node agent/agent.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.115.0",
     "ws": "^8.18.0"
   }
 }
