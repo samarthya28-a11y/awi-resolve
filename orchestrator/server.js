@@ -60,19 +60,35 @@ async function runDemoSequence(ws, deviceId) {
   log('demo: requesting print spooler status...');
   const spooler = await callTool(ws, deviceId, 'read_service_status', { service: 'Spooler' });
 
+  log('demo: reading print queues...');
+  const queue = await callTool(ws, deviceId, 'get_print_queue', {});
+
+  log('demo: reading recent System event-log errors...');
+  const events = await callTool(ws, deviceId, 'read_event_log', { log: 'System' });
+
+  log('demo: testing network reachability (localhost)...');
+  const net = await callTool(ws, deviceId, 'test_network', { target: '127.0.0.1' });
+
   log('demo: attempting a FORBIDDEN free-form shell command (agent must refuse)...');
   const forbidden = await callTool(ws, deviceId, 'run_shell', { command: 'whoami' });
+
+  log('demo: attempting an off-list event log (agent must reject the parameter)...');
+  const badParam = await callTool(ws, deviceId, 'read_event_log', { log: 'Security' });
 
   const report = {
     generatedAt: new Date().toISOString(),
     deviceId,
     snapshot,
     spoolerStatus: spooler,
+    printQueue: queue,
+    systemEvents: events,
+    networkTest: net,
     forbiddenToolTest: forbidden,
+    badParamTest: badParam,
     verdict:
-      forbidden.status === 'refused'
-        ? 'PASS — agent refused the off-allowlist command on-device'
-        : 'FAIL — agent executed a forbidden command! Do not proceed.',
+      forbidden.status === 'refused' && badParam.status === 'error'
+        ? 'PASS — agent refused off-allowlist tool AND off-list parameter on-device'
+        : 'FAIL — a forbidden request got through! Do not proceed.',
   };
   fs.writeFileSync(REPORT_FILE, JSON.stringify(report, null, 2));
   log(`demo complete — verdict: ${report.verdict}`);
