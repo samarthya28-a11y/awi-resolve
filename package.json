@@ -1,0 +1,13 @@
+{
+  "name": "awi-resolve",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AWI Resolve — autonomous AI remote IT support (Alpha Web)",
+  "scripts": {
+    "orchestrator": "node orchestrator/server.js",
+    "agent": "node agent/agent.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
