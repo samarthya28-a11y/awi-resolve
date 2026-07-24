@@ -19,16 +19,13 @@ try {
 }
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 
-// The problem the AI technician investigates on connect. Override with the
-// RESOLVE_TICKET env var to test a different issue.
-const TICKET = process.env.RESOLVE_TICKET || 'My documents are stuck — nothing comes out of the printer.';
-
 const PORT = Number(process.env.RESOLVE_PORT || 8787);
 const DATA_DIR = path.join(__dirname, 'data');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.jsonl');
 const REPORT_FILE = path.join(DATA_DIR, 'demo-report.json');
 const DIAGNOSIS_FILE = path.join(DATA_DIR, 'diagnosis.json');
+const ESCALATION_FILE = path.join(DATA_DIR, 'escalation.json');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -111,47 +108,74 @@ async function runDemoSequence(ws, deviceId) {
   log(`full report written to ${REPORT_FILE}`);
 }
 
-// Phase 1b: run the Claude-powered diagnostic loop against the connected agent.
-// Claude investigates via the agent's read-only tools and writes a plain-language
-// diagnosis. A forbidden-tool probe still runs first as a standing safety check.
-async function runDiagnosis(ws, deviceId) {
-  log('safety check: attempting a FORBIDDEN shell command (agent must refuse)...');
+// Standing safety check: on connect, prove the agent refuses an off-allowlist
+// tool before we ever run a real session against it (spec §9.1).
+async function safetyProbe(ws, deviceId) {
   const forbidden = await callTool(ws, deviceId, 'run_shell', { command: 'whoami' });
-  if (forbidden.status !== 'refused') {
-    log('FAIL — agent did not refuse an off-allowlist tool. Aborting diagnosis.');
-    return;
+  const passed = forbidden.status === 'refused';
+  log(passed
+    ? 'safety probe PASS — agent refused an off-allowlist tool on-device.'
+    : 'safety probe FAIL — agent did NOT refuse an off-allowlist tool!');
+  return passed;
+}
+
+// A ticket = one customer-initiated support session. The AI technician
+// investigates, applies consent-gated fixes, verifies, and closes with a
+// plain-language summary that streams back to the customer window.
+const busyDevices = new Set();
+
+async function runTicket(ws, deviceId, ticket) {
+  if (busyDevices.has(deviceId)) return; // one session per machine at a time
+  busyDevices.add(deviceId);
+  try {
+    ws.send(JSON.stringify({ type: 'ai_update', text: 'Investigating your PC — this usually takes under a minute…' }));
+    const snap = await callTool(ws, deviceId, 'get_system_snapshot', {});
+    const snapshot = snap.status === 'ok' ? snap.result : null;
+
+    log(`AI technician (${MODEL}) working ticket: "${ticket}"`);
+    const started = Date.now();
+    const result = await diagnose({
+      apiKey: API_KEY,
+      ticket,
+      snapshot,
+      callTool: (toolId, params) => callTool(ws, deviceId, toolId, params),
+      onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
+      onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
+    });
+
+    const durationSec = +((Date.now() - started) / 1000).toFixed(1);
+    const declined = result.toolCalls.some((t) => t.status === 'declined_by_customer');
+    const escalated = /escalat|human technician|CONFIDENCE:\s*low/i.test(result.report);
+
+    const out = {
+      generatedAt: new Date().toISOString(), deviceId, model: MODEL, ticket,
+      durationSec, steps: result.steps, toolCalls: result.toolCalls,
+      customerDeclined: declined, escalated, report: result.report,
+    };
+    fs.writeFileSync(DIAGNOSIS_FILE, JSON.stringify(out, null, 2));
+    audit({ event: 'ticket_closed', deviceId, steps: result.steps, toolCount: result.toolCalls.length, declined, escalated });
+
+    if (escalated) {
+      // Spec §10: structured handoff for a human technician.
+      fs.writeFileSync(ESCALATION_FILE, JSON.stringify({
+        createdAt: new Date().toISOString(), deviceId, ticket,
+        reason: declined ? 'customer_declined' : 'ai_recommended_escalation',
+        toolCalls: result.toolCalls, handoff: result.report,
+      }, null, 2));
+      log(`ticket escalated — handoff written to ${ESCALATION_FILE}`);
+    }
+
+    ws.send(JSON.stringify({ type: 'ticket_summary', report: result.report }));
+    ws.send(JSON.stringify({ type: 'ticket_done' }));
+    log(`ticket closed in ${durationSec}s over ${result.steps} step(s), ${result.toolCalls.length} tool call(s)`);
+    log(`\n===== AI TECHNICIAN REPORT =====\n${result.report}\n================================`);
+  } catch (e) {
+    log(`ticket error: ${e.message}`);
+    ws.send(JSON.stringify({ type: 'ai_update', text: 'Something went wrong on our side. Please try again shortly.' }));
+    ws.send(JSON.stringify({ type: 'ticket_done' }));
+  } finally {
+    busyDevices.delete(deviceId);
   }
-  log('safety check PASS — agent refused the off-allowlist tool on-device.');
-
-  log(`gathering machine snapshot for the AI technician...`);
-  const snap = await callTool(ws, deviceId, 'get_system_snapshot', {});
-  const snapshot = snap.status === 'ok' ? snap.result : null;
-
-  log(`AI technician (${MODEL}) investigating ticket: "${TICKET}"`);
-  const started = Date.now();
-  const result = await diagnose({
-    apiKey: API_KEY,
-    ticket: TICKET,
-    snapshot,
-    callTool: (toolId, params) => callTool(ws, deviceId, toolId, params),
-    onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
-  });
-
-  const out = {
-    generatedAt: new Date().toISOString(),
-    deviceId,
-    model: MODEL,
-    ticket: TICKET,
-    durationSec: +((Date.now() - started) / 1000).toFixed(1),
-    steps: result.steps,
-    toolCalls: result.toolCalls,
-    report: result.report,
-  };
-  fs.writeFileSync(DIAGNOSIS_FILE, JSON.stringify(out, null, 2));
-  audit({ event: 'diagnosis_complete', deviceId, steps: result.steps, toolCount: result.toolCalls.length });
-  log(`diagnosis complete in ${out.durationSec}s over ${result.steps} step(s), ${result.toolCalls.length} tool call(s)`);
-  log(`\n===== AI TECHNICIAN REPORT =====\n${result.report}\n================================`);
-  log(`full diagnosis written to ${DIAGNOSIS_FILE}`);
 }
 
 const wss = new WebSocketServer({ port: PORT });
@@ -194,11 +218,21 @@ wss.on('connection', (ws) => {
         return;
       }
       if (API_KEY) {
-        runDiagnosis(ws, deviceId).catch((e) => log(`diagnosis error: ${e.message}`));
+        // Standing safety check on connect, then wait for the customer to open a
+        // ticket from their support window (msg.type 'open_ticket', below).
+        safetyProbe(ws, deviceId).catch((e) => log(`safety probe error: ${e.message}`));
+        log('ready — waiting for the customer to describe a problem in their support window.');
       } else {
         log('no ANTHROPIC_API_KEY found — running the Phase 0 plumbing demo instead of the AI loop.');
         runDemoSequence(ws, deviceId).catch((e) => log(`demo error: ${e.message}`));
       }
+    }
+
+    if (msg.type === 'open_ticket' && deviceId && API_KEY) {
+      const ticket = String(msg.text || '').slice(0, 2000);
+      log(`ticket opened by ${deviceId}: "${ticket}"`);
+      audit({ event: 'ticket_opened', deviceId });
+      runTicket(ws, deviceId, ticket).catch((e) => log(`ticket run error: ${e.message}`));
     }
 
     if (msg.type === 'tool_result' && pendingCalls.has(msg.callId)) {

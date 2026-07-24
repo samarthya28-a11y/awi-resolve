@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AWI Resolve — IT Support</title>
+<style>
+  :root { --bg:#0f1720; --panel:#16212e; --line:#25333f; --ink:#e7eef5; --muted:#8ba0b3;
+          --accent:#2f9e6f; --accent2:#3a7bd5; --warn:#e0a341; --danger:#d1554f; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 -apple-system,Segoe UI,Roboto,Arial,sans-serif;
+         background:var(--bg); color:var(--ink); height:100vh; display:flex; flex-direction:column; }
+  header { padding:14px 18px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:10px; }
+  header .dot { width:10px; height:10px; border-radius:50%; background:var(--muted); }
+  header .dot.on { background:var(--accent); box-shadow:0 0 8px var(--accent); }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  header .sub { color:var(--muted); font-size:12px; margin-left:auto; }
+  #feed { flex:1; overflow-y:auto; padding:18px; display:flex; flex-direction:column; gap:10px; }
+  .msg { max-width:88%; padding:10px 13px; border-radius:12px; white-space:pre-wrap; }
+  .me { align-self:flex-end; background:var(--accent2); color:#fff; border-bottom-right-radius:3px; }
+  .ai { align-self:flex-start; background:var(--panel); border:1px solid var(--line); }
+  .sys { align-self:center; color:var(--muted); font-size:12.5px; font-style:italic; }
+  .action { align-self:flex-start; color:var(--muted); font-size:13px; display:flex; gap:7px; align-items:center; }
+  .action .tick { color:var(--accent); }
+  .report { align-self:flex-start; background:var(--panel); border:1px solid var(--line);
+            border-left:3px solid var(--accent); border-radius:10px; padding:12px 14px; max-width:92%; }
+  .report h4 { margin:0 0 4px; font-size:12px; letter-spacing:.04em; color:var(--accent); text-transform:uppercase; }
+  .report p { margin:0 0 10px; }
+  .consent { align-self:stretch; background:#1d2836; border:1px solid var(--warn);
+             border-radius:12px; padding:14px; }
+  .consent .q { margin-bottom:10px; }
+  .consent .btns { display:flex; gap:10px; }
+  button { font:inherit; font-weight:600; border:0; border-radius:9px; padding:9px 16px; cursor:pointer; }
+  .ok { background:var(--accent); color:#fff; }
+  .no { background:transparent; color:var(--muted); border:1px solid var(--line); }
+  .consent.answered { opacity:.6; }
+  .consent.answered .btns { display:none; }
+  footer { padding:12px 14px; background:var(--panel); border-top:1px solid var(--line); display:flex; gap:10px; }
+  #box { flex:1; resize:none; background:var(--bg); color:var(--ink); border:1px solid var(--line);
+         border-radius:10px; padding:10px 12px; font:inherit; max-height:120px; }
+  #send { background:var(--accent2); color:#fff; }
+  #send:disabled { opacity:.5; cursor:default; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <h1>AWI Resolve · Automated IT Support</h1>
+    <span class="sub" id="host">connecting…</span>
+  </header>
+  <div id="feed"></div>
+  <footer>
+    <textarea id="box" rows="1" placeholder="Describe your computer problem…"></textarea>
+    <button id="send">Get help</button>
+  </footer>
+
+<script>
+const feed = document.getElementById('feed');
+const box = document.getElementById('box');
+const send = document.getElementById('send');
+const dot = document.getElementById('dot');
+const hostEl = document.getElementById('host');
+let ws, busy = false;
+
+function el(cls, text) {
+  const d = document.createElement('div');
+  d.className = cls; if (text != null) d.textContent = text;
+  feed.appendChild(d); feed.scrollTop = feed.scrollHeight; return d;
+}
+function connect() {
+  ws = new WebSocket('ws://' + location.host);
+  ws.onopen = () => { dot.classList.add('on'); };
+  ws.onclose = () => { dot.classList.remove('on'); hostEl.textContent = 'reconnecting…'; setTimeout(connect, 1500); };
+  ws.onmessage = (e) => handle(JSON.parse(e.data));
+}
+function handle(m) {
+  switch (m.type) {
+    case 'hello': hostEl.textContent = m.hostname; break;
+    case 'status': el('msg sys', m.text); break;
+    case 'ai_message': el('msg ai', m.text); break;
+    case 'action': { const d = el('action'); d.innerHTML = '<span class="tick">✓</span> ' + m.text; break; }
+    case 'consent': renderConsent(m); break;
+    case 'summary': renderSummary(m.report); break;
+    case 'done': setBusy(false); break;
+  }
+}
+function renderConsent(m) {
+  const c = el('consent');
+  c.innerHTML = '<div class="q"></div><div class="btns"><button class="ok">Yes, go ahead</button><button class="no">No</button></div>';
+  c.querySelector('.q').textContent = m.prompt;
+  c.querySelector('.ok').onclick = () => answer(c, m.consentId, 'accepted');
+  c.querySelector('.no').onclick = () => answer(c, m.consentId, 'declined');
+}
+function answer(c, consentId, decision) {
+  ws.send(JSON.stringify({ type: 'consent_response', consentId, decision }));
+  c.classList.add('answered');
+  el('msg sys', decision === 'accepted' ? 'You approved the action.' : 'You declined the action.');
+}
+function renderSummary(r) {
+  const parts = { DIAGNOSIS:'', EVIDENCE:'', FIX:'', OUTCOME:'', CONFIDENCE:'' };
+  let cur = null;
+  r.split('\n').forEach(line => {
+    const mm = line.match(/^(DIAGNOSIS|EVIDENCE|FIX|OUTCOME|CONFIDENCE)\s*:\s*(.*)$/);
+    if (mm) { cur = mm[1]; parts[cur] = mm[2]; } else if (cur) { parts[cur] += '\n' + line; }
+  });
+  const box = el('report');
+  const order = ['DIAGNOSIS','FIX','OUTCOME','EVIDENCE','CONFIDENCE'];
+  const labels = { DIAGNOSIS:'What was wrong', FIX:'What was done', OUTCOME:'Result',
+                   EVIDENCE:'How I checked', CONFIDENCE:'Confidence' };
+  let html = '';
+  order.forEach(k => { if (parts[k] && parts[k].trim()) html += '<h4>'+labels[k]+'</h4><p>'+parts[k].trim().replace(/</g,'&lt;')+'</p>'; });
+  box.innerHTML = html || ('<p>'+r.replace(/</g,'&lt;')+'</p>');
+}
+function setBusy(b) { busy = b; send.disabled = b; box.disabled = b; send.textContent = b ? 'Working…' : 'Get help'; }
+function submit() {
+  const text = box.value.trim();
+  if (!text || busy) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    el('msg sys', 'Still connecting to the support service — please try again in a moment.');
+    return;
+  }
+  el('msg me', text);
+  ws.send(JSON.stringify({ type: 'open_ticket', text }));
+  box.value = ''; setBusy(true);
+}
+send.onclick = submit;
+box.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
+connect();
+</script>
+</body>
+</html>

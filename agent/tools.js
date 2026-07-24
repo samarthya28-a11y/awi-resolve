@@ -120,14 +120,102 @@ async function readServiceStatus(params) {
   );
 }
 
-// The complete allowlist. tier 0 = read-only diagnostic, runs without consent.
-// Tier 1/2 tools arrive in Phase 2 together with the consent UI.
+// ---- Tier-1 fixes (low risk, no consent prompt, shown live in the feed) ----
+
+async function clearDnsCache() {
+  await ps('Clear-DnsClientCache');
+  return { done: true, action: 'Flushed the DNS resolver cache.' };
+}
+
+// ---- Tier-2 fixes (state-changing, require customer consent) ----
+
+// Services the agent is allowed to restart — narrower than the readable list.
+const RESTARTABLE_SERVICES = ['Spooler', 'Dnscache', 'W32Time', 'wuauserv'];
+const SERVICE_LABELS = {
+  Spooler: 'Print Spooler (printing)',
+  Dnscache: 'DNS Client (name lookups)',
+  W32Time: 'Windows Time',
+  wuauserv: 'Windows Update',
+};
+
+async function restartService(params) {
+  const name = params && params.service;
+  if (!RESTARTABLE_SERVICES.includes(name)) {
+    throw new Error(`service '${name}' is not on the restartable list`);
+  }
+  // Start-or-restart: a stopped service can't be "restarted" (that errors), so
+  // start it; a running one is restarted to clear its state. Starting/stopping a
+  // system service needs elevation — the agent runs as a Windows service
+  // (LocalSystem) in production (spec §5.1). If we're not elevated, say so
+  // clearly so the escalation handoff is precise.
+  try {
+    await ps(
+      `$s = Get-Service -Name ${name}; ` +
+      `if ($s.Status -eq 'Running') { Restart-Service -Name ${name} -Force } else { Start-Service -Name ${name} } `
+    );
+  } catch (e) {
+    if (/cannot open|access is denied|PermissionDenied/i.test(e.message)) {
+      throw new Error(
+        `The support agent doesn't have permission to control the ${name} service on this machine ` +
+        `(it needs to run with administrator rights, which it does as a Windows service in production).`
+      );
+    }
+    throw e;
+  }
+  const status = await psJson(
+    `Get-Service -Name ${name} | Select-Object @{n='Status';e={$_.Status.ToString()}} | ConvertTo-Json`
+  );
+  const running = status && status.Status === 'Running';
+  return {
+    done: running,
+    service: name,
+    statusAfter: status && status.Status,
+    action: running ? `Started the ${name} service (now Running).` : `Tried to start ${name} but it is ${status && status.Status}.`,
+  };
+}
+
+async function clearPrintQueue() {
+  // Count first (for an honest result), then remove every queued job.
+  const before = await getPrintQueue();
+  await ps('Get-Printer | ForEach-Object { Get-PrintJob -PrinterName $_.Name -ErrorAction SilentlyContinue | Remove-PrintJob }');
+  const after = await getPrintQueue();
+  return { done: true, jobsCleared: before.jobCount - after.jobCount, jobsRemaining: after.jobCount };
+}
+
+// The complete allowlist. Adding a tool here requires a spec version bump (§6).
+//   tier 0 = read-only diagnostic — runs silently.
+//   tier 1 = low-risk fix       — runs without a prompt, shown live in the feed.
+//   tier 2 = state-changing fix — requires customer consent. `consent(params)`
+//            returns the plain-language prompt text; it is TEMPLATE-generated here
+//            from {tool, params}, never written by the AI model (spec §9.3), so a
+//            hijacked model can't forge what the customer sees.
 const TOOLS = {
+  // Tier 0
   get_system_snapshot: { tier: 0, run: () => getSystemSnapshot() },
   read_service_status: { tier: 0, run: (p) => readServiceStatus(p) },
   get_print_queue:     { tier: 0, run: () => getPrintQueue() },
   read_event_log:      { tier: 0, run: (p) => readEventLog(p) },
   test_network:        { tier: 0, run: (p) => testNetwork(p) },
+  // Tier 1
+  clear_dns_cache:     { tier: 1, run: () => clearDnsCache(), note: 'Flushing the DNS cache' },
+  // Tier 2
+  restart_service: {
+    tier: 2,
+    run: (p) => restartService(p),
+    consent: (p) =>
+      `I'd like to restart the ${SERVICE_LABELS[p.service] || p.service} service. ` +
+      (p.service === 'Spooler'
+        ? 'Any documents currently waiting to print will be cancelled and need re-printing.'
+        : 'A brief interruption to that service is expected.') +
+      ' Is that OK?',
+  },
+  clear_print_queue: {
+    tier: 2,
+    run: () => clearPrintQueue(),
+    consent: () =>
+      "I'd like to delete the stuck print jobs so new documents can print. " +
+      'Anything currently in the queue will need to be sent again. Is that OK?',
+  },
 };
 
 module.exports = { TOOLS };
