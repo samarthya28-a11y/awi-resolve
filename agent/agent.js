@@ -26,6 +26,7 @@ function loadConfig() {
 const CONFIG = loadConfig();
 const ORCH_URL = process.env.RESOLVE_ORCH_URL || CONFIG.orchestratorUrl || 'ws://127.0.0.1:8787';
 const UI_PORT = Number(process.env.RESOLVE_UI_PORT || CONFIG.uiPort || 8790);
+const ENROLLMENT_SECRET = process.env.RESOLVE_ENROLLMENT_SECRET || CONFIG.enrollmentSecret || '';
 const AGENT_VERSION = '0.2.0';
 const CONSENT_TIMEOUT_MS = 60000; // spec §7: timeout is treated as declined
 const DATA_DIR = path.join(__dirname, 'data');
@@ -147,7 +148,7 @@ function connect(identity) {
 
   ws.on('open', () => {
     ws.send(JSON.stringify({ type: 'hello', deviceId: identity.deviceId, deviceSecret: identity.deviceSecret,
-      hostname: os.hostname(), agentVersion: AGENT_VERSION }));
+      hostname: os.hostname(), agentVersion: AGENT_VERSION, enrollmentSecret: ENROLLMENT_SECRET }));
   });
 
   ws.on('message', (raw) => {

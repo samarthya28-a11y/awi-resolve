@@ -1,0 +1,29 @@
+# AWI Resolve connector — Fly.io config.
+# Rename "app" to your chosen unique name before deploying (or let `fly launch` set it).
+app = "awi-resolve-connector"
+primary_region = "sin"  # Singapore — lowest latency to India; change if you prefer
+
+[build]
+
+[env]
+  PORT = "8787"
+
+[http_service]
+  internal_port = 8787
+  force_https = true          # agents connect over wss:// (TLS terminated at Fly's edge)
+  # Always-on: the connector must hold customer WebSocket connections open, so it
+  # must NOT sleep. Keep one machine running at all times.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

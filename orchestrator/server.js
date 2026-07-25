@@ -4,22 +4,24 @@
 // runs the Claude-powered diagnostic loop when an agent connects.
 
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { diagnose, MODEL } = require('./ai');
 
-// Load the Anthropic API key from awi-resolve/.env (gitignored). Node 20.6+ /
-// 26 has process.loadEnvFile built in.
+// Load env from a local .env for dev (gitignored). In the cloud, real env vars /
+// host secrets are already set, so a missing .env is fine.
 const ENV_FILE = path.join(__dirname, '..', '.env');
-try {
-  process.loadEnvFile(ENV_FILE);
-} catch {
-  /* no .env — the AI loop will be skipped and we fall back to the plumbing demo */
-}
+try { process.loadEnvFile(ENV_FILE); } catch { /* rely on real env vars */ }
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 
-const PORT = Number(process.env.RESOLVE_PORT || 8787);
+// Door key: when set (always in production), an agent must present a matching
+// enrollmentSecret to connect. Unset in local dev => open, for convenience.
+const ENROLLMENT_SECRET = process.env.RESOLVE_ENROLLMENT_SECRET || '';
+
+// Fly/most hosts inject PORT; fall back to our dev default.
+const PORT = Number(process.env.PORT || process.env.RESOLVE_PORT || 8787);
 const DATA_DIR = path.join(__dirname, 'data');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.jsonl');
@@ -179,8 +181,21 @@ async function runTicket(ws, deviceId, ticket) {
   }
 }
 
-const wss = new WebSocketServer({ port: PORT });
-log(`listening on ws://127.0.0.1:${PORT}`);
+// HTTP server for the host's health check + the WebSocket upgrade endpoint.
+const httpServer = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('AWI Resolve orchestrator OK');
+  } else {
+    res.writeHead(404).end();
+  }
+});
+const wss = new WebSocketServer({ server: httpServer });
+httpServer.listen(PORT, '0.0.0.0', () => {
+  log(`listening on port ${PORT} (health: /health)`);
+  log(ENROLLMENT_SECRET ? 'enrollment secret REQUIRED' : 'enrollment OPEN (dev — no secret set)');
+  if (!API_KEY) log('WARNING: ANTHROPIC_API_KEY not set — AI loop disabled.');
+});
 
 wss.on('connection', (ws) => {
   let deviceId = null;
@@ -190,6 +205,14 @@ wss.on('connection', (ws) => {
     try { msg = JSON.parse(raw.toString()); } catch { return; }
 
     if (msg.type === 'hello') {
+      // Door key: reject connections that don't present the shared enrollment
+      // secret (skipped only in local dev when no secret is configured).
+      if (ENROLLMENT_SECRET && msg.enrollmentSecret !== ENROLLMENT_SECRET) {
+        log(`rejected connection from ${msg.hostname || 'unknown'} — bad/missing enrollment secret`);
+        ws.send(JSON.stringify({ type: 'auth_failed', reason: 'enrollment_secret' }));
+        ws.close();
+        return;
+      }
       const devices = loadDevices();
       const known = devices[msg.deviceId];
       if (!known) {
