@@ -31,6 +31,9 @@ const TOOLS = [
   { name: 'test_network',
     description: 'Ping + DNS-resolve a hostname or IP from the customer PC. Use for a printer IP or the Gespage server.',
     input_schema: { type: 'object', properties: { target: { type: 'string' } }, required: ['target'], additionalProperties: false } },
+  { name: 'get_temp_usage',
+    description: 'Measure temporary-file usage: total MB in the temp folder, MB reclaimable (files older than a day), and how many. Use for "slow PC" / "disk full" / "low on space" complaints. No parameters.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
 
   // ---- Tier 1: low-risk fix (applied without a prompt, shown to the customer) ----
   { name: 'clear_dns_cache',
@@ -43,6 +46,9 @@ const TOOLS = [
     input_schema: { type: 'object', properties: { service: { type: 'string', enum: ['Spooler','Dnscache','W32Time','wuauserv'] } }, required: ['service'], additionalProperties: false } },
   { name: 'clear_print_queue',
     description: 'Delete all stuck print jobs so new documents can print. The customer will be asked to approve before it runs. No parameters.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'clean_temp_files',
+    description: 'Delete temporary files older than a day to free disk space (safe; Windows regenerates them). The customer will be asked to approve before it runs. Use after get_temp_usage shows meaningful reclaimable space. No parameters.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
 ];
 
@@ -66,7 +72,9 @@ DIAGNOSIS: what was wrong (1-2 sentences).
 FIX: what you did (or tried). If nothing could be done automatically, say what you recommend.
 OUTCOME: is it resolved now? If you verified it, say so. If not resolved, say what happens next (e.g. "escalated to a human technician").
 EVIDENCE: the key findings, briefly.
-CONFIDENCE: high / medium / low.`;
+CONFIDENCE: high / medium / low.
+
+Then, on its own final line, a machine-readable flag — "ESCALATE: yes" if this ticket needs a human technician now (unresolved, low confidence, customer declined the needed fix, or an on-site check is required), otherwise "ESCALATE: no". This line is for our systems; the customer doesn't see it.`;
 
 async function diagnose({ apiKey, ticket, snapshot, callTool, onStep = () => {}, onUpdate = () => {} }) {
   const client = new Anthropic({ apiKey });
@@ -90,7 +98,10 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, onStep = () => {},
     const narration = response.content.filter((b) => b.type === 'text').map((b) => b.text).join(' ').trim();
 
     if (response.stop_reason !== 'tool_use') {
-      return { report: narration, toolCalls, steps: step + 1, stopReason: response.stop_reason };
+      // Parse the explicit escalation flag, then strip it from the customer-facing text.
+      const escalate = /^ESCALATE:\s*yes/im.test(narration);
+      const report = narration.replace(/^ESCALATE:.*$/im, '').trim();
+      return { report, escalate, toolCalls, steps: step + 1, stopReason: response.stop_reason };
     }
     if (narration) onUpdate(narration);
 
@@ -112,7 +123,7 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, onStep = () => {},
 
   return {
     report: 'DIAGNOSIS: Inconclusive within the step limit.\nOUTCOME: Escalated to a human technician.\nCONFIDENCE: low.',
-    toolCalls, steps: MAX_STEPS, stopReason: 'max_steps',
+    escalate: true, toolCalls, steps: MAX_STEPS, stopReason: 'max_steps',
   };
 }
 

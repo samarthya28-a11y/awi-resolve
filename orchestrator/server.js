@@ -145,7 +145,8 @@ async function runTicket(ws, deviceId, ticket) {
 
     const durationSec = +((Date.now() - started) / 1000).toFixed(1);
     const declined = result.toolCalls.some((t) => t.status === 'declined_by_customer');
-    const escalated = /escalat|human technician|CONFIDENCE:\s*low/i.test(result.report);
+    // Explicit flag from the AI (parsed in ai.js), plus: a declined fix always escalates.
+    const escalated = result.escalate === true || declined;
 
     const out = {
       generatedAt: new Date().toISOString(), deviceId, model: MODEL, ticket,

@@ -120,6 +120,19 @@ async function readServiceStatus(params) {
   );
 }
 
+// Reclaimable temp-file usage (Tier-0). Runs as the current user, no elevation.
+async function getTempUsage() {
+  const out = await psJson(
+    "$t = $env:TEMP; " +
+    "$f = Get-ChildItem -Path $t -Recurse -File -Force -ErrorAction SilentlyContinue; " +
+    "$old = $f | Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) }; " +
+    "@{ tempTotalMB = [math]::Round((($f | Measure-Object -Property Length -Sum).Sum)/1MB,1); " +
+    "   reclaimableMB = [math]::Round((($old | Measure-Object -Property Length -Sum).Sum)/1MB,1); " +
+    "   oldFileCount = ($old | Measure-Object).Count } | ConvertTo-Json"
+  );
+  return out || { tempTotalMB: 0, reclaimableMB: 0, oldFileCount: 0 };
+}
+
 // ---- Tier-1 fixes (low risk, no consent prompt, shown live in the feed) ----
 
 async function clearDnsCache() {
@@ -174,6 +187,22 @@ async function restartService(params) {
   };
 }
 
+// Delete temp files older than 1 day (skips in-use/locked files). Runs as the
+// current user — no elevation needed, so this is the fix that completes even in a
+// non-elevated dev run. Only touches %TEMP%, which Windows/apps regenerate.
+async function cleanTempFiles() {
+  const out = await psJson(
+    "$t = $env:TEMP; " +
+    "$before = ($(Get-ChildItem -Path $t -Recurse -File -Force -ErrorAction SilentlyContinue) | Measure-Object -Property Length -Sum).Sum; " +
+    "Get-ChildItem -Path $t -Recurse -File -Force -ErrorAction SilentlyContinue | " +
+    "  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue; " +
+    "$after = ($(Get-ChildItem -Path $t -Recurse -File -Force -ErrorAction SilentlyContinue) | Measure-Object -Property Length -Sum).Sum; " +
+    "@{ freedMB = [math]::Round((($before - $after))/1MB,1) } | ConvertTo-Json"
+  );
+  const freed = (out && out.freedMB) || 0;
+  return { done: true, freedMB: freed, action: `Freed ${freed} MB of temporary files.` };
+}
+
 async function clearPrintQueue() {
   // Count first (for an honest result), then remove every queued job.
   const before = await getPrintQueue();
@@ -196,6 +225,7 @@ const TOOLS = {
   get_print_queue:     { tier: 0, run: () => getPrintQueue() },
   read_event_log:      { tier: 0, run: (p) => readEventLog(p) },
   test_network:        { tier: 0, run: (p) => testNetwork(p) },
+  get_temp_usage:      { tier: 0, run: () => getTempUsage() },
   // Tier 1
   clear_dns_cache:     { tier: 1, run: () => clearDnsCache(), note: 'Flushing the DNS cache' },
   // Tier 2
@@ -215,6 +245,14 @@ const TOOLS = {
     consent: () =>
       "I'd like to delete the stuck print jobs so new documents can print. " +
       'Anything currently in the queue will need to be sent again. Is that OK?',
+  },
+  clean_temp_files: {
+    tier: 2,
+    run: () => cleanTempFiles(),
+    consent: () =>
+      "I'd like to delete temporary files older than a day to free up disk space. " +
+      'Windows and your apps automatically recreate any they still need, and nothing ' +
+      'personal is touched. Is that OK?',
   },
 };
 
