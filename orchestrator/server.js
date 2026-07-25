@@ -57,15 +57,24 @@ function audit(event) {
 
 const pendingCalls = new Map(); // callId -> resolve()
 
+// How long the cloud waits for the agent to answer a tool call.
+// MUST exceed the agent's consent window (60s) — otherwise we could give up on a
+// Tier-2 action while the customer is still deciding, and the action could then
+// run after the AI has already concluded it didn't. Deployments also need room
+// for a download + installer run (agent caps the installer at 5 min).
+const TOOL_TIMEOUT_MS = 120000;         // read-only + quick fixes (> 60s consent)
+const DEPLOY_TIMEOUT_MS = 480000;       // consent + download + install + verify
+
 function callTool(ws, deviceId, toolId, params) {
   return new Promise((resolve) => {
     const callId = crypto.randomUUID();
     pendingCalls.set(callId, resolve);
     audit({ event: 'tool_call_sent', deviceId, toolId, params });
     ws.send(JSON.stringify({ type: 'tool_call', callId, toolId, params }));
+    const ms = toolId === 'deploy_software' ? DEPLOY_TIMEOUT_MS : TOOL_TIMEOUT_MS;
     setTimeout(() => {
       if (pendingCalls.delete(callId)) resolve({ status: 'timeout', toolId });
-    }, 45000);
+    }, ms);
   });
 }
 
@@ -150,7 +159,9 @@ async function runTicket(ws, deviceId, ticket) {
     });
 
     const durationSec = +((Date.now() - started) / 1000).toFixed(1);
-    const declined = result.toolCalls.some((t) => t.status === 'declined_by_customer');
+    const declined = result.toolCalls.some(
+      (t) => t.status === 'declined_by_customer' || t.status === 'timeout'
+    );
     // Explicit flag from the AI (parsed in ai.js), plus: a declined fix always escalates.
     const escalated = result.escalate === true || declined;
 

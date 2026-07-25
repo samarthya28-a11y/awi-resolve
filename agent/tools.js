@@ -5,8 +5,14 @@
 
 const { execFile } = require('child_process');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const https = require('https');
+const { getEntry, listProducts } = require('./catalog');
 
 const PS_TIMEOUT_MS = 30000;
+const INSTALL_TIMEOUT_MS = 300000; // 5 min for an installer to finish
 
 // Fixed list of services the agent may inspect (Tier-0) — spec §6.
 const ALLOWED_SERVICES = ['Spooler', 'Dhcp', 'Dnscache', 'W32Time', 'wuauserv', 'LanmanWorkstation'];
@@ -211,6 +217,103 @@ async function clearPrintQueue() {
   return { done: true, jobsCleared: before.jobCount - after.jobCount, jobsRemaining: after.jobCount };
 }
 
+// ---- Level 2 deployment: install from the approved, hash-pinned catalog ----
+
+// Check whether a catalogued product is already installed (Tier-0, read-only).
+function checkInstalled(params) {
+  const entry = getEntry(params && params.productId);
+  if (!entry) {
+    throw new Error(`'${params && params.productId}' is not in the approved installer catalog`);
+  }
+  const installed = fs.existsSync(entry.verifyPath);
+  return { productId: params.productId, product: entry.product, installed, checkedPath: entry.verifyPath };
+}
+
+// Download over HTTPS to a file, following redirects, with a size cap.
+function download(url, dest, maxBytes = 200 * 1024 * 1024, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    if (!/^https:\/\//i.test(url)) return reject(new Error('installer URL must be https'));
+    https.get(url, { timeout: 120000 }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
+        res.resume();
+        if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
+        return resolve(download(res.headers.location, dest, maxBytes, redirectsLeft - 1));
+      }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`download failed: HTTP ${res.statusCode}`)); }
+      let bytes = 0;
+      const file = fs.createWriteStream(dest);
+      res.on('data', (c) => {
+        bytes += c.length;
+        if (bytes > maxBytes) { res.destroy(); file.destroy(); reject(new Error('installer exceeded size limit')); }
+      });
+      res.pipe(file);
+      file.on('finish', () => file.close(() => resolve(bytes)));
+      file.on('error', reject);
+    }).on('error', reject).on('timeout', function () { this.destroy(new Error('download timed out')); });
+  });
+}
+
+function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256');
+    fs.createReadStream(file).on('data', (d) => h.update(d))
+      .on('end', () => resolve(h.digest('hex')))
+      .on('error', reject);
+  });
+}
+
+// Tier-2. The AI may only pass a catalog ID — never a URL, filename or arguments.
+// Sequence: resolve entry -> download pinned URL -> verify sha256 (abort on
+// mismatch) -> run with the catalog's fixed args -> verify the install landed.
+async function deploySoftware(params) {
+  const id = params && params.productId;
+  const entry = getEntry(id);
+  if (!entry) throw new Error(`'${id}' is not in the approved installer catalog`);
+  if (!entry.sha256 || !/^[a-f0-9]{64}$/i.test(entry.sha256)) {
+    // Fail closed: an entry without a valid pinned hash can never run.
+    throw new Error(`catalog entry '${id}' has no valid pinned checksum — refusing to install`);
+  }
+  if (fs.existsSync(entry.verifyPath)) {
+    return { done: true, alreadyInstalled: true, product: entry.product,
+             action: `${entry.product} is already installed — nothing to do.` };
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awi-resolve-'));
+  const file = path.join(dir, 'installer.exe');
+  const cleanup = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
+
+  try {
+    const bytes = await download(entry.url, file);
+    const digest = await sha256File(file);
+    if (digest.toLowerCase() !== entry.sha256.toLowerCase()) {
+      cleanup();
+      throw new Error(
+        `SECURITY: installer checksum mismatch for ${entry.product} — expected ${entry.sha256}, got ${digest}. Installation aborted.`
+      );
+    }
+
+    await new Promise((resolve, reject) => {
+      execFile(file, entry.args, { timeout: INSTALL_TIMEOUT_MS, windowsHide: true }, (err) => {
+        if (err) return reject(new Error(`installer failed: ${err.message.split('\n')[0]}`));
+        resolve();
+      });
+    });
+
+    const installed = fs.existsSync(entry.verifyPath);
+    cleanup();
+    return {
+      done: installed, product: entry.product, version: entry.version,
+      downloadedBytes: bytes, checksumVerified: true, verifyPath: entry.verifyPath,
+      action: installed
+        ? `Installed ${entry.product} ${entry.version} (checksum verified).`
+        : `Ran the ${entry.product} installer, but ${entry.verifyPath} was not found afterwards.`,
+    };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}
+
 // The complete allowlist. Adding a tool here requires a spec version bump (§6).
 //   tier 0 = read-only diagnostic — runs silently.
 //   tier 1 = low-risk fix       — runs without a prompt, shown live in the feed.
@@ -226,6 +329,8 @@ const TOOLS = {
   read_event_log:      { tier: 0, run: (p) => readEventLog(p) },
   test_network:        { tier: 0, run: (p) => testNetwork(p) },
   get_temp_usage:      { tier: 0, run: () => getTempUsage() },
+  check_installed:     { tier: 0, run: (p) => checkInstalled(p) },
+  list_approved_software: { tier: 0, run: () => ({ products: listProducts() }) },
   // Tier 1
   clear_dns_cache:     { tier: 1, run: () => clearDnsCache(), note: 'Flushing the DNS cache' },
   // Tier 2
@@ -245,6 +350,16 @@ const TOOLS = {
     consent: () =>
       "I'd like to delete the stuck print jobs so new documents can print. " +
       'Anything currently in the queue will need to be sent again. Is that OK?',
+  },
+  deploy_software: {
+    tier: 2,
+    run: (p) => deploySoftware(p),
+    consent: (p) => {
+      const e = getEntry(p && p.productId);
+      const what = e ? `${e.product} ${e.version} — ${e.describe}` : `'${p && p.productId}' (not in the approved catalog)`;
+      return `I'd like to download and install ${what} on this PC. ` +
+             `I'll check the download is genuine (checksum) before running it, and it comes only from Alpha Web's approved list. Is that OK?`;
+    },
   },
   clean_temp_files: {
     tier: 2,
