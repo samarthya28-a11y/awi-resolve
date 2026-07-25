@@ -5,4 +5,5 @@ packaging
 .git
 .env
 **/data
-*.md
+# NOTE: do not add "*.md" here — deployment manuals in playbooks/deploy are .md
+# and must ship in the image.

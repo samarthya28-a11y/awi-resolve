@@ -10,6 +10,8 @@ RUN npm ci --omit=dev
 
 # Only the orchestrator runs in the cloud (the agent ships to customers separately)
 COPY orchestrator ./orchestrator
+# Deployment manuals (Level 1 guided deployment) are read by the orchestrator
+COPY playbooks ./playbooks
 
 # The app reads PORT from the environment (host injects it); default 8787.
 ENV PORT=8787

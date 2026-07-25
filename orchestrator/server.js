@@ -9,6 +9,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { diagnose, MODEL } = require('./ai');
+const { loadManuals } = require('./manuals');
+
+const MANUALS = loadManuals();
 
 // Load env from a local .env for dev (gitignored). In the cloud, real env vars /
 // host secrets are already set, so a missing .env is fine.
@@ -141,6 +144,7 @@ async function runTicket(ws, deviceId, ticket) {
       ticket,
       snapshot,
       callTool: (toolId, params) => callTool(ws, deviceId, toolId, params),
+      manuals: MANUALS,
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
     });
@@ -168,7 +172,14 @@ async function runTicket(ws, deviceId, ticket) {
       log(`ticket escalated — handoff written to ${ESCALATION_FILE}`);
     }
 
-    ws.send(JSON.stringify({ type: 'ticket_summary', report: result.report }));
+    // Support tickets end with the structured DIAGNOSIS/FIX report card; deployment
+    // guidance ends with a conversational numbered plan — send it as a normal
+    // message bubble so its steps render readably.
+    if (/^\s*(DIAGNOSIS|FIX|OUTCOME)\s*:/im.test(result.report)) {
+      ws.send(JSON.stringify({ type: 'ticket_summary', report: result.report }));
+    } else {
+      ws.send(JSON.stringify({ type: 'ai_message', text: result.report }));
+    }
     ws.send(JSON.stringify({ type: 'ticket_done' }));
     log(`ticket closed in ${durationSec}s over ${result.steps} step(s), ${result.toolCalls.length} tool call(s)`);
     log(`\n===== AI TECHNICIAN REPORT =====\n${result.report}\n================================`);
