@@ -1,0 +1,5 @@
+{
+  "_comment": "AWI Resolve agent settings. orchestratorUrl points at the cloud AI service. For the local demo it stays on 127.0.0.1; for a real customer install, set it to the hosted orchestrator's wss:// address.",
+  "orchestratorUrl": "ws://127.0.0.1:8787",
+  "uiPort": 8790
+}

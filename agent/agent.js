@@ -14,8 +14,18 @@ const os = require('os');
 const WebSocket = require('ws');
 const { TOOLS } = require('./tools');
 
-const ORCH_URL = process.env.RESOLVE_ORCH_URL || 'ws://127.0.0.1:8787';
-const UI_PORT = Number(process.env.RESOLVE_UI_PORT || 8790);
+// Config precedence: env var > config.json (next to the app) > default. The
+// installer writes config.json so the packaged app can point at the cloud
+// orchestrator without editing code or setting env vars.
+function loadConfig() {
+  for (const p of [path.join(__dirname, '..', 'config.json'), path.join(__dirname, 'config.json')]) {
+    try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* try next */ }
+  }
+  return {};
+}
+const CONFIG = loadConfig();
+const ORCH_URL = process.env.RESOLVE_ORCH_URL || CONFIG.orchestratorUrl || 'ws://127.0.0.1:8787';
+const UI_PORT = Number(process.env.RESOLVE_UI_PORT || CONFIG.uiPort || 8790);
 const AGENT_VERSION = '0.2.0';
 const CONSENT_TIMEOUT_MS = 60000; // spec §7: timeout is treated as declined
 const DATA_DIR = path.join(__dirname, 'data');

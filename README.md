@@ -74,8 +74,33 @@ http://127.0.0.1:8790. Needs `ANTHROPIC_API_KEY` in `.env`.
 the agent runs as a Windows service (LocalSystem, spec §5.1); run the dev agent from
 an Administrator terminal to exercise the fix-succeeds path.
 
+## Packaging — installable app ✅
+
+`packaging/` builds a self-contained customer package (no Node install needed on the
+target):
+
+- `powershell packaging\build.ps1` → `dist\AWI-Resolve\` (bundled node.exe + agent +
+  `ws` + config + installer). ~99 MB, mostly the Node runtime. `dist/` is gitignored.
+- On the target PC: copy the `AWI-Resolve` folder over and run **`Install AWI Resolve.cmd`**
+  (one Windows UAC prompt). It copies to `C:\Program Files\AWI Resolve`, registers an
+  auto-start scheduled task that runs **elevated in the user session** (so service/print
+  fixes have the rights they need), and adds "AWI Resolve Support" shortcuts (Desktop +
+  Start Menu) that open the window as an app-mode Edge window.
+- `Uninstall.ps1` removes all of it.
+- `config.json` sets the orchestrator URL (localhost for the demo; the hosted `wss://`
+  address for a real deployment).
+
+Verified: the packaged agent runs from its bundled runtime, serves the window,
+connects, enforces the allowlist, and completes a full ticket. Installer scripts
+parse-checked; the elevated install step is run once by the customer.
+
+**Not yet:** native tray icon (needs a heavier UI shell like Electron — the app-mode
+window shortcut stands in for now); code-signing the package; hosting the orchestrator
+in the cloud (currently the agent points at a local/dev orchestrator via config.json).
+
 ## Next phases (spec §11)
 
-1. **Phase 3** — Pilot with 2–3 Gespage customers.
-2. **Packaging** — Electron tray wrapper for the UI; run the agent as an auto-starting
-   Windows service so fixes have the rights they need.
+1. **Host the orchestrator** in the cloud (small always-on VPS/Fly.io box) so installed
+   agents connect to a real `wss://` endpoint instead of localhost.
+2. **Phase 3** — Pilot with 2–3 Gespage customers.
+3. **Polish** — native tray icon + code-signed installer.

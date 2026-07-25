@@ -1,4 +1,5 @@
 node_modules/
 agent/data/
 orchestrator/data/
+dist/
 .env
