@@ -57,11 +57,16 @@ function toUI(obj) {
   for (const c of uiClients) if (c.readyState === WebSocket.OPEN) c.send(s);
 }
 
+const LOGO_FILE = path.join(__dirname, 'ui', 'logo.svg');
+
 function startUiServer() {
   const httpServer = http.createServer((req, res) => {
     if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/index'))) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       fs.createReadStream(UI_FILE).pipe(res);
+    } else if (req.method === 'GET' && req.url.startsWith('/logo.svg')) {
+      res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=86400' });
+      fs.createReadStream(LOGO_FILE).pipe(res);
     } else {
       res.writeHead(404).end('Not found');
     }
