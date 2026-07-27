@@ -57,16 +57,22 @@ function toUI(obj) {
   for (const c of uiClients) if (c.readyState === WebSocket.OPEN) c.send(s);
 }
 
-const LOGO_FILE = path.join(__dirname, 'ui', 'logo.svg');
+// Static assets served to the support window (corporate logo + product mark).
+const UI_ASSETS = {
+  '/logo.svg': path.join(__dirname, 'ui', 'logo.svg'),
+  '/resolve-mark.svg': path.join(__dirname, 'ui', 'resolve-mark.svg'),
+  '/resolve-mark-white.svg': path.join(__dirname, 'ui', 'resolve-mark-white.svg'),
+};
 
 function startUiServer() {
   const httpServer = http.createServer((req, res) => {
-    if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/index'))) {
+    const route = (req.url || '').split('?')[0];
+    if (req.method === 'GET' && (route === '/' || route.startsWith('/index'))) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       fs.createReadStream(UI_FILE).pipe(res);
-    } else if (req.method === 'GET' && req.url.startsWith('/logo.svg')) {
+    } else if (req.method === 'GET' && UI_ASSETS[route]) {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=86400' });
-      fs.createReadStream(LOGO_FILE).pipe(res);
+      fs.createReadStream(UI_ASSETS[route]).pipe(res);
     } else {
       res.writeHead(404).end('Not found');
     }

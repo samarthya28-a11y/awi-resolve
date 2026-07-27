@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>AWI Resolve — Alpha Web IT Support</title>
-<link rel="icon" href="/logo.svg" />
+<link rel="icon" href="/resolve-mark.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -31,7 +31,8 @@
   .brand strong { font-size:18px; font-weight:800; letter-spacing:-.01em; color:var(--navy); }
   .brand small { font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.25em; color:var(--brand-orange); margin-top:3px; }
   .product { margin-left:14px; padding-left:14px; border-left:1px solid var(--line);
-             font-size:13.5px; font-weight:700; }
+             font-size:13.5px; font-weight:700; display:flex; align-items:center; gap:8px; }
+  .product .mark { width:22px; height:22px; flex:none; }
   .product .g { background:var(--grad); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
   .status { margin-left:auto; display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted); font-weight:600; }
   .dot { width:9px; height:9px; border-radius:50%; background:#c7ceda; transition:.3s; }
@@ -93,7 +94,7 @@
   <header>
     <img src="/logo.svg" alt="Alpha Web" />
     <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
-    <span class="product"><span class="g">AWI Resolve</span> · Automated IT Support</span>
+    <span class="product"><img class="mark" src="/resolve-mark.svg" alt="" /><span class="g">AWI Resolve</span> · Automated IT Support</span>
     <span class="status"><span class="dot" id="dot"></span><span id="host">connecting…</span></span>
   </header>
   <div id="feed"></div>

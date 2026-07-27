@@ -57,12 +57,14 @@ Write-Host '  auto-start registered (runs with fix permissions)' -ForegroundColo
 $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
 $useEdge = Test-Path $edge
 $sh = New-Object -ComObject WScript.Shell
+$iconPath = Join-Path $InstallTo 'awi-resolve.ico'
 foreach ($dir in @([Environment]::GetFolderPath('Desktop'),
                    (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'))) {
   $lnk = $sh.CreateShortcut((Join-Path $dir 'AWI Resolve Support.lnk'))
   if ($useEdge) { $lnk.TargetPath = $edge; $lnk.Arguments = "--app=$UiUrl" }
   else          { $lnk.TargetPath = $UiUrl }
   $lnk.Description = 'Open the AWI Resolve support window'
+  if (Test-Path $iconPath) { $lnk.IconLocation = "$iconPath,0" }   # product mark
   $lnk.Save()
 }
 Write-Host '  shortcuts created (Desktop + Start Menu)' -ForegroundColor Green

@@ -20,6 +20,12 @@ Copy-Item "$Root\agent\ui" "$Out\agent\ui" -Recurse
 # Only runtime dependency
 Copy-Item "$Root\node_modules\ws" "$Out\node_modules\ws" -Recurse
 
+# Product icon (shortcut / taskbar). Regenerate if missing.
+if (-not (Test-Path "$Pkg\awi-resolve.ico")) {
+  powershell -NoProfile -ExecutionPolicy Bypass -File "$Pkg\make-icon.ps1" | Out-Null
+}
+Copy-Item "$Pkg\awi-resolve.ico" $Out
+
 # Config + installer payload
 Copy-Item "$Pkg\config.template.json" (Join-Path $Out 'config.json')
 Copy-Item "$Pkg\run-agent-hidden.vbs","$Pkg\Install.ps1","$Pkg\Uninstall.ps1","$Pkg\README.txt" $Out
