@@ -349,6 +349,104 @@ async function renewNetwork() {
                       : 'Renewed the network address, but no valid IP was obtained.' };
 }
 
+// ---- Endpoint security posture (Tier-0, read-only) ----
+//
+// DESIGN RULE: security tools may only ever move protection in the SAFE
+// direction. There is deliberately NO tool to disable antivirus, real-time
+// protection, the firewall or SmartScreen — not even consent-gated (spec §6
+// Tier-X). An agent that could disarm protection fleet-wide would be the most
+// valuable target on a customer's network.
+
+// Overall protection state: registered AV products, Defender detail, firewall
+// per profile, disk encryption, UAC, SmartScreen.
+async function getSecurityPosture() {
+  const out = await psJson(
+    // Registered AV products (works even when a 3rd-party AV replaces Defender)
+    "$av=@(); try { Get-CimInstance -Namespace root\\SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | " +
+    "  ForEach-Object { $s=$_.productState; $av += @{ name=$_.displayName; " +
+    "    realtimeOn=(($s -band 0x1000) -ne 0); definitionsUpToDate=(($s -band 0x10) -eq 0) } } } catch {}; " +
+    // Defender specifics (may be passive if a 3rd-party AV is active)
+    "$d=$null; try { $m=Get-MpComputerStatus -ErrorAction Stop; $d=@{ " +
+    "  realTimeProtection=[bool]$m.RealTimeProtectionEnabled; antivirusEnabled=[bool]$m.AntivirusEnabled; " +
+    "  tamperProtection=[bool]$m.IsTamperProtected; " +
+    "  signatureAgeDays=[int]$m.AntivirusSignatureAge; " +
+    "  lastQuickScan=if($m.QuickScanEndTime){$m.QuickScanEndTime.ToString('yyyy-MM-dd')}else{$null}; " +
+    "  lastFullScan=if($m.FullScanEndTime){$m.FullScanEndTime.ToString('yyyy-MM-dd')}else{$null} } } catch {}; " +
+    // Firewall per profile
+    "$fw=@(); try { Get-NetFirewallProfile -ErrorAction Stop | ForEach-Object { " +
+    "  $fw += @{ profile=[string]$_.Name; enabled=[bool]$_.Enabled } } } catch {}; " +
+    // Disk encryption
+    "$enc='unknown'; try { $b=Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop; " +
+    "  $enc=[string]$b.ProtectionStatus } catch {}; " +
+    // UAC + SmartScreen
+    "$uac=$null; try { $uac=[bool](Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' -Name EnableLUA -ErrorAction Stop).EnableLUA } catch {}; " +
+    "$ss=$null; try { $ss=[string](Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer' -Name SmartScreenEnabled -ErrorAction Stop).SmartScreenEnabled } catch {}; " +
+    "@{ antivirusProducts=$av; defender=$d; firewallProfiles=$fw; diskEncryptionC=$enc; uacEnabled=$uac; smartScreen=$ss } | ConvertTo-Json -Depth 5"
+  );
+  return out || {};
+}
+
+// Recent Defender detections / quarantine history.
+async function getThreatHistory() {
+  const out = await psJson(
+    "$t=@(); try { Get-MpThreatDetection -ErrorAction Stop | Sort-Object InitialDetectionTime -Descending | " +
+    "  Select-Object -First 15 | ForEach-Object { $id=$_; $name='unknown'; " +
+    "    try { $name=[string](Get-MpThreat -ThreatID $_.ThreatID -ErrorAction Stop).ThreatName } catch {}; " +
+    "    $t += @{ threat=$name; detected=$id.InitialDetectionTime.ToString('yyyy-MM-dd HH:mm'); " +
+    "             action=[string]$id.ActionSuccess; resources=@($id.Resources) | Select-Object -First 2 } } } catch {}; " +
+    "@{ detections=$t } | ConvertTo-Json -Depth 5"
+  );
+  const d = (out && out.detections) || [];
+  return { detectionCount: d.length, detections: d };
+}
+
+// Accounts with local administrator rights (privilege sprawl is a common risk).
+async function listLocalAdmins() {
+  const out = await psJson(
+    "$m=@(); try { Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop | ForEach-Object { " +
+    "  $m += @{ name=[string]$_.Name; type=[string]$_.ObjectClass; source=[string]$_.PrincipalSource } } } catch {}; " +
+    "@{ admins=$m } | ConvertTo-Json -Depth 4"
+  );
+  const a = (out && out.admins) || [];
+  return { adminCount: a.length, admins: a };
+}
+
+// ---- Security hardening (Tier-2, consent-gated, SAFE DIRECTION ONLY) ----
+
+async function updateDefenderSignatures() {
+  await ps('Update-MpSignature -ErrorAction Stop');
+  const st = await psJson("(Get-MpComputerStatus) | Select-Object @{n='ageDays';e={[int]$_.AntivirusSignatureAge}} | ConvertTo-Json");
+  return { done: true, signatureAgeDays: st && st.ageDays,
+           action: 'Updated the antivirus definitions to the latest available.' };
+}
+
+async function runSecurityScan() {
+  // Quick scan: checks the places malware actually lives. Minutes, not hours.
+  await ps('Start-MpScan -ScanType QuickScan -ErrorAction Stop');
+  const t = await getThreatHistory();
+  return { done: true, detectionCount: t.detectionCount, detections: t.detections,
+           action: t.detectionCount
+             ? `Quick scan finished. ${t.detectionCount} item(s) in the threat history.`
+             : 'Quick scan finished — nothing harmful found.' };
+}
+
+// Turn protection ON only. There is intentionally no counterpart to switch
+// anything off.
+async function enableProtection(params) {
+  const what = params && params.protection;
+  if (what === 'firewall') {
+    await ps('Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -ErrorAction Stop');
+    const fw = await psJson("Get-NetFirewallProfile | Select-Object @{n='p';e={$_.Name}},@{n='on';e={[bool]$_.Enabled}} | ConvertTo-Json");
+    return { done: true, firewall: fw, action: 'Turned the Windows Firewall on for all network profiles.' };
+  }
+  if (what === 'realtime_protection') {
+    await ps('Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction Stop');
+    const st = await psJson("(Get-MpComputerStatus) | Select-Object @{n='rtp';e={[bool]$_.RealTimeProtectionEnabled}} | ConvertTo-Json");
+    return { done: !!(st && st.rtp), action: 'Turned real-time antivirus protection back on.' };
+  }
+  throw new Error(`'${what}' is not a protection this tool can enable`);
+}
+
 // ---- Level 2 deployment: install from the approved, hash-pinned catalog ----
 
 // Check whether a catalogued product is already installed (Tier-0, read-only).
@@ -470,6 +568,9 @@ const TOOLS = {
   list_installed_programs: { tier: 0, run: () => listInstalledPrograms() },
   get_network_config:  { tier: 0, run: () => getNetworkConfig() },
   get_update_status:   { tier: 0, run: () => getUpdateStatus() },
+  get_security_posture:{ tier: 0, run: () => getSecurityPosture() },
+  get_threat_history:  { tier: 0, run: () => getThreatHistory() },
+  list_local_admins:   { tier: 0, run: () => listLocalAdmins() },
   // Tier 1
   clear_dns_cache:     { tier: 1, run: () => clearDnsCache(), note: 'Flushing the DNS cache' },
   // Tier 2
@@ -510,6 +611,29 @@ const TOOLS = {
     consent: () =>
       "I'd like to renew this PC's network address and clear the DNS cache. Your connection will " +
       'drop for a few seconds. Is that OK?',
+  },
+  update_defender_signatures: {
+    tier: 2,
+    run: () => updateDefenderSignatures(),
+    consent: () =>
+      "Your antivirus definitions are out of date. I'd like to download the latest ones now — " +
+      'this only makes your protection stronger. Is that OK?',
+  },
+  run_security_scan: {
+    tier: 2,
+    run: () => runSecurityScan(),
+    consent: () =>
+      "I'd like to run a quick antivirus scan of the places malware usually hides. It takes a few " +
+      "minutes and you can keep working, though the PC may feel a little slower. Is that OK?",
+  },
+  enable_protection: {
+    tier: 2,
+    run: (p) => enableProtection(p),
+    consent: (p) =>
+      (p && p.protection === 'firewall'
+        ? "The Windows Firewall is switched off. I'd like to turn it back on for all networks."
+        : 'Real-time antivirus protection is switched off. I\'d like to turn it back on.') +
+      ' This only increases your protection — I have no way to switch protection off. Is that OK?',
   },
   deploy_software: {
     tier: 2,
