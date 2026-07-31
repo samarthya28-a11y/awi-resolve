@@ -10,8 +10,10 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { diagnose, MODEL } = require('./ai');
 const { loadManuals } = require('./manuals');
+const { kbStats } = require('./kb');
 
 const MANUALS = loadManuals();
+const KB = kbStats();
 
 // Load env from a local .env for dev (gitignored). In the cloud, real env vars /
 // host secrets are already set, so a missing .env is fine.
@@ -137,6 +139,9 @@ async function safetyProbe(ws, deviceId) {
 // investigates, applies consent-gated fixes, verifies, and closes with a
 // plain-language summary that streams back to the customer window.
 const busyDevices = new Set();
+// Per-device customer-supplied documents: { pending: [] (not yet given to the
+// AI), all: [] (everything attached this session) }.
+const customerManuals = new Map();
 
 async function runTicket(ws, deviceId, ticket) {
   if (busyDevices.has(deviceId)) return; // one session per machine at a time
@@ -154,6 +159,19 @@ async function runTicket(ws, deviceId, ticket) {
       snapshot,
       callTool: (toolId, params) => callTool(ws, deviceId, toolId, params),
       manuals: MANUALS,
+      // Documents attached before this ticket started...
+      customerManuals: (() => {
+        const q = customerManuals.get(deviceId);
+        if (!q) return [];
+        const ready = q.pending.splice(0, q.pending.length);
+        return ready;
+      })(),
+      // ...and any attached WHILE the AI is working (picked up each step).
+      takePendingManuals: () => {
+        const q = customerManuals.get(deviceId);
+        if (!q || !q.pending.length) return [];
+        return q.pending.splice(0, q.pending.length);
+      },
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
     });
@@ -216,6 +234,7 @@ const wss = new WebSocketServer({ server: httpServer });
 httpServer.listen(PORT, '0.0.0.0', () => {
   log(`listening on port ${PORT} (health: /health)`);
   log(ENROLLMENT_SECRET ? 'enrollment secret REQUIRED' : 'enrollment OPEN (dev — no secret set)');
+  log(`knowledge base: ${KB.documents} document(s), ${KB.chunks} searchable sections`);
   if (!API_KEY) log('WARNING: ANTHROPIC_API_KEY not set — AI loop disabled.');
 });
 
@@ -272,6 +291,19 @@ wss.on('connection', (ws) => {
         log('no ANTHROPIC_API_KEY found — running the Phase 0 plumbing demo instead of the AI loop.');
         runDemoSequence(ws, deviceId).catch((e) => log(`demo error: ${e.message}`));
       }
+    }
+
+    // Customer-attached reference document. Queued per device: picked up by a
+    // running ticket on its next step, or used when the next ticket opens.
+    if (msg.type === 'attach_manual' && deviceId) {
+      const doc = { title: String(msg.title || 'Document').slice(0, 120),
+                    text: String(msg.text || '').slice(0, 200000) };
+      const q = customerManuals.get(deviceId) || { pending: [], all: [] };
+      q.pending.push(doc);
+      q.all.push(doc);
+      customerManuals.set(deviceId, q);
+      audit({ event: 'manual_attached', deviceId, title: doc.title, chars: doc.text.length });
+      log(`customer attached "${doc.title}" (${doc.text.length} chars)`);
     }
 
     if (msg.type === 'open_ticket' && deviceId && API_KEY) {

@@ -217,6 +217,138 @@ async function clearPrintQueue() {
   return { done: true, jobsCleared: before.jobCount - after.jobCount, jobsRemaining: after.jobCount };
 }
 
+// ---- Expanded diagnostics (Tier-0, read-only) ----
+
+// Top memory/CPU consumers — the usual cause of "my PC is slow".
+async function listProcesses() {
+  const out = await psJson(
+    "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object -First 12 " +
+    "@{n='name';e={$_.ProcessName}},@{n='memMB';e={[math]::Round($_.WorkingSet64/1MB,0)}}," +
+    "@{n='cpuSec';e={if($_.CPU){[math]::Round($_.CPU,0)}else{0}}} | ConvertTo-Json"
+  );
+  const list = out ? (Array.isArray(out) ? out : [out]) : [];
+  return { topByMemory: list };
+}
+
+// Programs that launch at sign-in — the usual cause of slow start-up.
+async function listStartupItems() {
+  const out = await psJson(
+    "Get-CimInstance Win32_StartupCommand | Select-Object Name,Command,Location | ConvertTo-Json"
+  );
+  const list = out ? (Array.isArray(out) ? out : [out]) : [];
+  for (const i of list) if (i.Command && i.Command.length > 120) i.Command = i.Command.slice(0, 120) + '…';
+  return { count: list.length, items: list.slice(0, 25) };
+}
+
+// Drive health (SMART predict-failure + per-disk status).
+async function getDiskHealth() {
+  const out = await psJson(
+    "$r=@(); " +
+    "try { Get-PhysicalDisk | ForEach-Object { $r += @{ name=$_.FriendlyName; " +
+    "  mediaType=[string]$_.MediaType; healthStatus=[string]$_.HealthStatus; " +
+    "  operationalStatus=[string]$_.OperationalStatus; sizeGB=[math]::Round($_.Size/1GB,0) } } } catch {}; " +
+    "$pred=$null; try { $pred = (Get-CimInstance -Namespace root\\wmi -ClassName MSStorageDriver_FailurePredictStatus -ErrorAction Stop | " +
+    "  ForEach-Object { $_.PredictFailure }) -contains $true } catch {}; " +
+    "@{ disks=$r; failurePredicted=$pred } | ConvertTo-Json -Depth 4"
+  );
+  return out || { disks: [], failurePredicted: null };
+}
+
+// Devices Windows reports as faulty (Device Manager error codes) — drivers,
+// touchpads, adapters, printers that aren't working.
+async function listProblemDevices() {
+  const out = await psJson(
+    "Get-CimInstance Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -ne 0 } | " +
+    "Select-Object @{n='name';e={$_.Name}},@{n='errorCode';e={$_.ConfigManagerErrorCode}}," +
+    "@{n='status';e={$_.Status}} | ConvertTo-Json"
+  );
+  const list = out ? (Array.isArray(out) ? out : [out]) : [];
+  return { problemDeviceCount: list.length, devices: list };
+}
+
+// Installed programs (name + version) — "is X installed / what version?".
+async function listInstalledPrograms() {
+  const out = await psJson(
+    "$p='HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'," +
+    "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; " +
+    "Get-ItemProperty $p -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName } | " +
+    "Select-Object @{n='name';e={$_.DisplayName}},@{n='version';e={$_.DisplayVersion}} | " +
+    "Sort-Object name -Unique | ConvertTo-Json"
+  );
+  const list = out ? (Array.isArray(out) ? out : [out]) : [];
+  return { count: list.length, programs: list.slice(0, 120) };
+}
+
+// IP / DNS / gateway per adapter — connectivity problems.
+async function getNetworkConfig() {
+  const out = await psJson(
+    "$a=@(); Get-NetIPConfiguration | ForEach-Object { $a += @{ " +
+    "  adapter=[string]$_.InterfaceAlias; status=[string]$_.NetAdapter.Status; " +
+    "  ipv4=[string]$_.IPv4Address.IPAddress; gateway=[string]$_.IPv4DefaultGateway.NextHop; " +
+    "  dns=@($_.DNSServer | Where-Object {$_.AddressFamily -eq 2} | ForEach-Object { $_.ServerAddresses }) } }; " +
+    "@{ adapters=$a } | ConvertTo-Json -Depth 5"
+  );
+  return out || { adapters: [] };
+}
+
+// Windows Update health: last install + pending reboot.
+async function getUpdateStatus() {
+  const out = await psJson(
+    "$last=$null; try { $last=(Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First 1).InstalledOn.ToString('yyyy-MM-dd') } catch {}; " +
+    "$reboot = (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') -or " +
+    "          (Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'); " +
+    "@{ lastUpdateInstalled=$last; rebootPending=[bool]$reboot } | ConvertTo-Json"
+  );
+  return out || {};
+}
+
+// ---- Expanded fixes ----
+
+// Tier-2. Enable a stopped/disabled service AND set it to start automatically.
+// This is the fix the earlier clock ticket actually needed (W32Time was Stopped
+// with StartType Manual, so a plain restart could never work).
+async function enableService(params) {
+  const name = params && params.service;
+  if (!RESTARTABLE_SERVICES.includes(name)) {
+    throw new Error(`service '${name}' is not on the manageable list`);
+  }
+  try {
+    await ps(`Set-Service -Name ${name} -StartupType Automatic; Start-Service -Name ${name}`);
+  } catch (e) {
+    if (/cannot open|access is denied|PermissionDenied/i.test(e.message)) {
+      throw new Error(
+        `The support agent needs administrator rights to enable the ${name} service ` +
+        `(it has them when installed as a Windows service).`
+      );
+    }
+    throw e;
+  }
+  const status = await psJson(
+    `Get-Service -Name ${name} | Select-Object @{n='Status';e={$_.Status.ToString()}},@{n='StartType';e={$_.StartType.ToString()}} | ConvertTo-Json`
+  );
+  const running = status && status.Status === 'Running';
+  return { done: running, service: name, statusAfter: status && status.Status,
+           startTypeAfter: status && status.StartType,
+           action: running ? `Enabled ${name} and set it to start automatically.`
+                           : `Tried to enable ${name}; it is ${status && status.Status}.` };
+}
+
+// Tier-2. Restart Windows Explorer — clears a frozen taskbar/desktop/File Explorer.
+async function restartExplorer() {
+  await ps('Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 800; if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }');
+  return { done: true, action: 'Restarted Windows Explorer (taskbar and desktop).' };
+}
+
+// Tier-2. Release + renew the DHCP lease — fixes many "connected, no internet" cases.
+async function renewNetwork() {
+  await ps('ipconfig /release | Out-Null; ipconfig /renew | Out-Null; Clear-DnsClientCache');
+  const cfg = await getNetworkConfig();
+  const ok = (cfg.adapters || []).some((a) => a.ipv4 && !/^169\.254\./.test(a.ipv4));
+  return { done: ok, adapters: cfg.adapters,
+           action: ok ? 'Renewed the network address and cleared the DNS cache.'
+                      : 'Renewed the network address, but no valid IP was obtained.' };
+}
+
 // ---- Level 2 deployment: install from the approved, hash-pinned catalog ----
 
 // Check whether a catalogued product is already installed (Tier-0, read-only).
@@ -331,6 +463,13 @@ const TOOLS = {
   get_temp_usage:      { tier: 0, run: () => getTempUsage() },
   check_installed:     { tier: 0, run: (p) => checkInstalled(p) },
   list_approved_software: { tier: 0, run: () => ({ products: listProducts() }) },
+  list_processes:      { tier: 0, run: () => listProcesses() },
+  list_startup_items:  { tier: 0, run: () => listStartupItems() },
+  get_disk_health:     { tier: 0, run: () => getDiskHealth() },
+  list_problem_devices:{ tier: 0, run: () => listProblemDevices() },
+  list_installed_programs: { tier: 0, run: () => listInstalledPrograms() },
+  get_network_config:  { tier: 0, run: () => getNetworkConfig() },
+  get_update_status:   { tier: 0, run: () => getUpdateStatus() },
   // Tier 1
   clear_dns_cache:     { tier: 1, run: () => clearDnsCache(), note: 'Flushing the DNS cache' },
   // Tier 2
@@ -350,6 +489,27 @@ const TOOLS = {
     consent: () =>
       "I'd like to delete the stuck print jobs so new documents can print. " +
       'Anything currently in the queue will need to be sent again. Is that OK?',
+  },
+  enable_service: {
+    tier: 2,
+    run: (p) => enableService(p),
+    consent: (p) =>
+      `The ${SERVICE_LABELS[p && p.service] || (p && p.service)} service is switched off. ` +
+      `I'd like to turn it on and set it to start automatically from now on. Is that OK?`,
+  },
+  restart_explorer: {
+    tier: 2,
+    run: () => restartExplorer(),
+    consent: () =>
+      "I'd like to restart Windows Explorer (your taskbar and desktop). They'll blink off for a " +
+      'second and come back — open windows and files are not affected. Is that OK?',
+  },
+  renew_network: {
+    tier: 2,
+    run: () => renewNetwork(),
+    consent: () =>
+      "I'd like to renew this PC's network address and clear the DNS cache. Your connection will " +
+      'drop for a few seconds. Is that OK?',
   },
   deploy_software: {
     tier: 2,

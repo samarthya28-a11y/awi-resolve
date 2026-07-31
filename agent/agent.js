@@ -91,6 +91,20 @@ function startUiServer() {
           toUI({ type: 'status', text: 'Support service is offline right now. Please try again shortly.' });
           toUI({ type: 'done' });
         }
+      } else if (m.type === 'attach_manual') {
+        // Customer-supplied reference document. Forwarded to the AI as untrusted
+        // data; size-capped so a huge file can't blow up the session.
+        const title = String(m.title || 'Document').slice(0, 120);
+        const text = String(m.text || '').slice(0, 200000);
+        if (!text.trim()) {
+          toUI({ type: 'status', text: "That file looked empty — please try another." });
+        } else if (orchWs && orchWs.readyState === WebSocket.OPEN) {
+          log(`customer attached a document: "${title}" (${text.length} chars)`);
+          orchWs.send(JSON.stringify({ type: 'attach_manual', title, text }));
+          toUI({ type: 'action', text: `Attached "${title}" — the technician will use it.` });
+        } else {
+          toUI({ type: 'status', text: 'Not connected to the support service — please try again in a moment.' });
+        }
       } else if (m.type === 'consent_response') {
         const resolve = pendingConsents.get(m.consentId);
         if (resolve) { pendingConsents.delete(m.consentId); resolve(m.decision === 'accepted' ? 'accepted' : 'declined'); }

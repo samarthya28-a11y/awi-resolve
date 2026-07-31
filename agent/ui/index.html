@@ -84,6 +84,8 @@
          background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px 15px; max-height:130px; }
   #box:focus { outline:none; border-color:var(--brand-blue); box-shadow:0 0 0 3px rgba(0,174,239,.15); }
   #box:disabled { opacity:.6; }
+  .ghost { background:var(--surface); border:1px solid var(--line); color:var(--muted); font-size:17px; padding:11px 14px; }
+  .ghost:hover { border-color:var(--brand-blue); color:var(--brand-blue); }
   #send { background:var(--brand-orange); color:#fff; box-shadow:0 8px 20px rgba(244,117,33,.28); padding:12px 24px; }
   #send:hover:not(:disabled) { transform:translateY(-1px); }
   #send:disabled { opacity:.5; cursor:default; box-shadow:none; }
@@ -99,6 +101,8 @@
   </header>
   <div id="feed"></div>
   <footer>
+    <input type="file" id="file" accept=".txt,.md,.log,.csv,.json,.htm,.html" hidden />
+    <button id="attach" class="ghost" title="Attach a manual or guide (.txt, .md)">📎</button>
     <textarea id="box" rows="1" placeholder="Describe your computer problem…"></textarea>
     <button id="send">Get help</button>
   </footer>
@@ -207,6 +211,31 @@ function submit() {
 }
 send.onclick = submit;
 box.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
+
+// Attach a manual / guide. Works before OR during a request — if the technician
+// is already working, it picks the document up and carries on with it.
+const fileInput = document.getElementById('file');
+document.getElementById('attach').onclick = () => fileInput.click();
+fileInput.onchange = () => {
+  const f = fileInput.files && fileInput.files[0];
+  if (!f) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    el('msg sys', 'Still connecting — please try attaching again in a moment.');
+    fileInput.value = ''; return;
+  }
+  if (f.size > 2 * 1024 * 1024) {
+    el('msg sys', 'That file is too large (max 2 MB). Please attach a smaller document.');
+    fileInput.value = ''; return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, text: String(reader.result || '') }));
+    fileInput.value = '';
+  };
+  reader.onerror = () => { el('msg sys', "Sorry, that file couldn't be read."); fileInput.value = ''; };
+  reader.readAsText(f);
+};
+
 connect();
 </script>
 </body>
