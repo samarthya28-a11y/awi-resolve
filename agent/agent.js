@@ -165,6 +165,55 @@ async function handleToolCall(ws, msg) {
   }
 }
 
+// ---------------------------------------------------------------- posture reporting
+// Periodically send a read-only security/health summary so the ops dashboard can
+// show the whole fleet's protection state. Read-only: nothing here changes the
+// machine, and it never includes file contents or personal data.
+const POSTURE_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
+
+async function sendPostureReport(ws) {
+  try {
+    const [posture, snapshot, devices, threats, admins, updates] = await Promise.all([
+      TOOLS.get_security_posture.run({}).catch(() => null),
+      TOOLS.get_system_snapshot.run({}).catch(() => null),
+      TOOLS.list_problem_devices.run({}).catch(() => null),
+      TOOLS.get_threat_history.run({}).catch(() => null),
+      TOOLS.list_local_admins.run({}).catch(() => null),
+      TOOLS.get_update_status.run({}).catch(() => null),
+    ]);
+    if (ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: 'posture_report',
+      at: new Date().toISOString(),
+      hostname: os.hostname(),
+      agentVersion: AGENT_VERSION,
+      posture,
+      threats: threats ? { detectionCount: threats.detectionCount } : null,
+      admins: admins ? { adminCount: admins.adminCount } : null,
+      updates,
+      problemDevices: devices ? devices.problemDeviceCount : null,
+      machine: snapshot ? {
+        os: snapshot.os, uptimeMinutes: snapshot.uptimeMinutes,
+        diskFreeGB: snapshot.diskC && snapshot.diskC.freeGB,
+        memFreeGB: snapshot.memory && snapshot.memory.freeGB,
+        printerCount: Array.isArray(snapshot.printers) ? snapshot.printers.length : null,
+      } : null,
+    }));
+    log('sent security posture report');
+  } catch (e) {
+    log(`posture report failed: ${e.message}`);
+  }
+}
+
+let postureTimer = null;
+function startPostureReporting(ws) {
+  sendPostureReport(ws);                       // report immediately on connect
+  clearInterval(postureTimer);
+  postureTimer = setInterval(() => {
+    if (ws.readyState === WebSocket.OPEN) sendPostureReport(ws);
+  }, POSTURE_INTERVAL_MS);
+}
+
 // ---------------------------------------------------------------- orchestrator link
 function connect(identity) {
   log(`connecting to orchestrator at ${ORCH_URL}`);
@@ -179,8 +228,14 @@ function connect(identity) {
   ws.on('message', (raw) => {
     let msg; try { msg = JSON.parse(raw.toString()); } catch { return; }
     switch (msg.type) {
-      case 'enrolled': log(`enrolled with orchestrator as device ${identity.deviceId}`); break;
-      case 'welcome_back': log('recognized by orchestrator (already enrolled)'); break;
+      case 'enrolled':
+        log(`enrolled with orchestrator as device ${identity.deviceId}`);
+        startPostureReporting(ws);
+        break;
+      case 'welcome_back':
+        log('recognized by orchestrator (already enrolled)');
+        startPostureReporting(ws);
+        break;
       case 'auth_failed': log('AUTH FAILED — identity rejected, not retrying'); ws.close(); process.exit(1); break;
       case 'tool_call': handleToolCall(ws, msg); break;
       // Progress + results the orchestrator streams for the customer UI:

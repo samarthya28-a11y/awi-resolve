@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AWI Resolve — Fleet Security</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{--blue:#00aeef;--magenta:#ad208e;--green:#9ccb3b;--orange:#f47521;
+        --navy:#15213b;--navy-l:#1f3158;--ink:#1c2333;--muted:#5b667d;--line:#e6e9f0;--surface:#f6f8fc;
+        --crit:#d1554f;--warn:#e0a341;
+        --grad:linear-gradient(100deg,var(--blue),var(--magenta) 55%,var(--orange));}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Plus Jakarta Sans",Segoe UI,system-ui,sans-serif;background:var(--surface);color:var(--ink);line-height:1.55}
+  header{display:flex;align-items:center;gap:14px;padding:16px 26px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  .mark{width:30px;height:30px;flex:none}
+  .brand{display:flex;flex-direction:column;line-height:1}
+  .brand strong{font-size:17px;font-weight:800;color:var(--navy)}
+  .brand small{font-size:9px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--orange);margin-top:3px}
+  .title{margin-left:12px;padding-left:14px;border-left:1px solid var(--line);font-weight:700;font-size:14px}
+  .title .g{background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .meta{margin-left:auto;font-size:12px;color:var(--muted)}
+  main{padding:24px 26px;max-width:1180px;margin:0 auto}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin-bottom:24px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:0 10px 30px rgba(21,33,59,.06)}
+  .card .n{font-size:30px;font-weight:800;line-height:1.1}
+  .card .l{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:4px}
+  .card.crit .n{color:var(--crit)} .card.warn .n{color:var(--warn)} .card.ok .n{color:var(--green)}
+  .dev{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:0 10px 30px rgba(21,33,59,.05)}
+  .dev>.head{display:flex;align-items:center;gap:12px;padding:14px 18px;cursor:pointer}
+  .pill{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;padding:4px 10px;border-radius:999px;color:#fff;flex:none}
+  .pill.critical{background:var(--crit)} .pill.warning{background:var(--warn)} .pill.ok{background:var(--green)}
+  .host{font-weight:700;font-size:15px}
+  .sub{font-size:12px;color:var(--muted)}
+  .spacer{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+  .chip.off{background:#fdecea;border-color:#f5c6c2;color:var(--crit)}
+  .findings{border-top:1px solid var(--line);padding:6px 18px 14px;display:none}
+  .dev.open .findings{display:block}
+  .f{display:flex;gap:11px;padding:11px 0;border-bottom:1px dashed var(--line)}
+  .f:last-child{border-bottom:0}
+  .dot{width:9px;height:9px;border-radius:50%;margin-top:7px;flex:none}
+  .dot.critical{background:var(--crit)} .dot.warning{background:var(--warn)} .dot.info{background:var(--blue)}
+  .f .t{font-weight:700;font-size:13.5px}
+  .f .d{font-size:12.5px;color:var(--muted)}
+  .f .fx{font-size:11.5px;color:var(--navy-l);margin-top:3px}
+  .f .fx code{background:var(--surface);border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:11px}
+  .clean{font-size:13px;color:var(--muted);padding:12px 0}
+  .empty{background:#fff;border:1px dashed var(--line);border-radius:14px;padding:40px;text-align:center;color:var(--muted)}
+  footer{max-width:1180px;margin:0 auto;padding:10px 26px 34px;font-size:11.5px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <svg class="mark" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00aeef"/><stop offset=".55" stop-color="#ad208e"/><stop offset="1" stop-color="#f47521"/></linearGradient></defs>
+    <path d="M45.5 15.2A21 21 0 1 1 32 11" fill="none" stroke="url(#g)" stroke-width="6.5" stroke-linecap="round"/>
+    <circle cx="50.5" cy="12" r="4.2" fill="#9ccb3b"/>
+    <path d="M22.5 33.2l7 7L44 25.5" fill="none" stroke="#15213b" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
+  <span class="title"><span class="g">AWI Resolve</span> · Fleet Security</span>
+  <span class="meta" id="meta">loading…</span>
+</header>
+<main>
+  <div class="cards" id="cards"></div>
+  <div id="list"></div>
+</main>
+<footer>Machines report a read-only protection summary every 6 hours. Click a machine to see its findings.</footer>
+
+<script>
+const token = new URLSearchParams(location.search).get('token') || '';
+const esc = s => String(s == null ? '' : s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+
+function ago(iso){
+  const m = Math.round((Date.now() - new Date(iso).getTime())/60000);
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m/60); if (h < 48) return h + ' h ago';
+  return Math.round(h/24) + ' d ago';
+}
+
+async function load(){
+  let data;
+  try {
+    const r = await fetch('/api/fleet?token=' + encodeURIComponent(token), {cache:'no-store'});
+    if (r.status === 401) { document.getElementById('list').innerHTML =
+      '<div class="empty">Unauthorised — open this page with the correct <code>?token=</code>.</div>';
+      document.getElementById('meta').textContent = ''; return; }
+    data = await r.json();
+  } catch { document.getElementById('meta').textContent = 'connection lost'; return; }
+
+  const s = data.summary;
+  document.getElementById('meta').textContent =
+    'Updated ' + new Date(s.generatedAt).toLocaleTimeString() + ' · auto-refresh 60s';
+  document.getElementById('cards').innerHTML = [
+    ['', s.total, 'Machines'],
+    ['crit', s.critical, 'Critical'],
+    ['warn', s.warning, 'Needs attention'],
+    ['ok', s.ok, 'Healthy'],
+    ['', s.offline, 'Not reporting'],
+  ].map(([c,n,l]) => `<div class="card ${c}"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+  if (!data.devices.length) {
+    document.getElementById('list').innerHTML =
+      '<div class="empty">No machines have reported yet. Agents report on connect and every 6 hours.</div>';
+    return;
+  }
+
+  document.getElementById('list').innerHTML = data.devices.map(d => {
+    const a = d.assessment, p = d.posture || {}, def = p.defender || {};
+    const chips = [];
+    const rtOff = def.realTimeProtection === false;
+    chips.push(`<span class="chip ${rtOff?'off':''}">AV ${rtOff?'OFF':'on'}</span>`);
+    const fwOff = (p.firewallProfiles||[]).some(x => x.enabled === false);
+    chips.push(`<span class="chip ${fwOff?'off':''}">Firewall ${fwOff?'OFF':'on'}</span>`);
+    if (typeof def.signatureAgeDays === 'number')
+      chips.push(`<span class="chip ${def.signatureAgeDays>3?'off':''}">defs ${def.signatureAgeDays}d</span>`);
+    const body = a.findings.length
+      ? a.findings.map(f => `<div class="f"><span class="dot ${f.severity}"></span><div>
+           <div class="t">${esc(f.title)}</div><div class="d">${esc(f.detail)}</div>
+           <div class="fx">Fix: <code>${esc(f.fix)}</code></div></div></div>`).join('')
+      : '<div class="clean">No issues found — protection is on, current, and nothing outstanding.</div>';
+    return `<div class="dev" onclick="this.classList.toggle('open')">
+      <div class="head"><span class="pill ${a.status}">${a.status}</span>
+        <span><span class="host">${esc(d.hostname)}</span>
+          <div class="sub">${esc((d.machine&&d.machine.os)||'')} · reported ${ago(d.lastReport)}${a.offline?' · not reporting':''}</div></span>
+        <span class="spacer">${chips.join('')}</span></div>
+      <div class="findings">${body}</div></div>`;
+  }).join('');
+}
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

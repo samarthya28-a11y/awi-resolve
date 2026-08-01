@@ -11,6 +11,11 @@ const { WebSocketServer } = require('ws');
 const { diagnose, MODEL } = require('./ai');
 const { loadManuals } = require('./manuals');
 const { kbStats } = require('./kb');
+const { recordPosture, fleetView } = require('./fleet');
+
+// The fleet dashboard exposes customer security posture, so it is never open.
+// Set RESOLVE_DASHBOARD_TOKEN to enable it; unset = dashboard disabled entirely.
+const DASHBOARD_TOKEN = process.env.RESOLVE_DASHBOARD_TOKEN || '';
 
 const MANUALS = loadManuals();
 const KB = kbStats();
@@ -222,13 +227,51 @@ async function runTicket(ws, deviceId, ticket) {
 }
 
 // HTTP server for the host's health check + the WebSocket upgrade endpoint.
+const DASHBOARD_FILE = path.join(__dirname, 'ui', 'fleet.html');
+
+// Constant-time-ish token compare
+function tokenOk(supplied) {
+  if (!DASHBOARD_TOKEN || !supplied) return false;
+  const a = Buffer.from(String(supplied));
+  const b = Buffer.from(DASHBOARD_TOKEN);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 const httpServer = http.createServer((req, res) => {
-  if (req.url === '/health' || req.url === '/') {
+  const url = new URL(req.url, 'http://localhost');
+  const route = url.pathname;
+
+  if (route === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('AWI Resolve orchestrator OK');
-  } else {
-    res.writeHead(404).end();
+    return res.end('AWI Resolve orchestrator OK');
   }
+
+  // ---- Fleet security dashboard (token-gated) ----
+  if (route === '/fleet' || route === '/api/fleet') {
+    if (!DASHBOARD_TOKEN) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      return res.end('Dashboard disabled (no RESOLVE_DASHBOARD_TOKEN set).');
+    }
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!tokenOk(supplied)) {
+      log(`dashboard access DENIED from ${req.socket.remoteAddress}`);
+      res.writeHead(401, { 'Content-Type': 'text/plain' });
+      return res.end('Unauthorised.');
+    }
+    if (route === '/api/fleet') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify(fleetView()));
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    return fs.createReadStream(DASHBOARD_FILE).pipe(res);
+  }
+
+  if (route === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    return res.end('AWI Resolve orchestrator OK');
+  }
+  res.writeHead(404).end();
 });
 const wss = new WebSocketServer({ server: httpServer });
 httpServer.listen(PORT, '0.0.0.0', () => {
@@ -295,6 +338,15 @@ wss.on('connection', (ws) => {
 
     // Customer-attached reference document. Queued per device: picked up by a
     // running ticket on its next step, or used when the next ticket opens.
+    // Periodic read-only security/health summary for the fleet dashboard.
+    if (msg.type === 'posture_report' && deviceId) {
+      try {
+        recordPosture(deviceId, msg);
+        audit({ event: 'posture_report', deviceId, hostname: msg.hostname });
+        log(`posture report from ${msg.hostname || deviceId}`);
+      } catch (e) { log(`posture record failed: ${e.message}`); }
+    }
+
     if (msg.type === 'attach_manual' && deviceId) {
       const doc = { title: String(msg.title || 'Document').slice(0, 120),
                     text: String(msg.text || '').slice(0, 200000) };
