@@ -31,16 +31,35 @@ const CATALOG = {
     describe: 'the free 7-Zip file-archive tool (about 5 MB, from the official 7-zip.org site)',
   },
 
-  // Gespage client — the flagship target. Intentionally DISABLED until Alpha Web
-  // pins an approved installer URL + sha256 from its own trusted source.
-  // 'gespage-client': {
-  //   product: 'Gespage Client',
-  //   version: 'FILL IN',
-  //   url: 'https://<alpha-web-approved-host>/gespage-client-<ver>.exe',
-  //   sha256: 'FILL IN',
-  //   args: ['/S'],           // confirm the real silent switch with Cartadis
-  //   verifyPath: 'C:\\Program Files\\Gespage\\...',
-  //   describe: 'the Gespage print client',
+  // ---------------------------------------------------------------------------
+  // Gespage Popup (print client) — Alpha Web's flagship deployment.
+  //
+  // DISABLED until `url` points at an Alpha Web-hosted copy of the installer.
+  // Everything else is ready: the sha256 below was computed from Alpha Web's own
+  // GespagePopup_Setup_7.3.4.37562148.msi (3,715,072 bytes). Re-compute it if the
+  // hosted file is a different build.
+  //
+  // To enable: host the MSI over HTTPS, put its URL below, confirm the sha256
+  // still matches the hosted file, confirm verifyPath on a real install, and
+  // uncomment. That is a spec-level change (§6) — review before shipping.
+  // ---------------------------------------------------------------------------
+  // 'gespage-popup': {
+  //   product: 'Gespage Popup (print client)',
+  //   version: '7.3.4.37562148',
+  //   url: 'https://<alpha-web-approved-host>/GespagePopup_Setup_7.3.4.37562148.msi',
+  //   sha256: '4baf8da1b3d2ff09afd91443b8418b49e7c3c1d0602b738eea443a2e477efeb4',
+  //   installerType: 'msi',
+  //   args: ['/qn'],                       // silent, no UI
+  //   params: {
+  //     SERVER_IP: {
+  //       required: true,
+  //       // hostname or IP only — nothing that could smuggle a second argument
+  //       pattern: '^[A-Za-z0-9][A-Za-z0-9.\\-]{0,252}$',
+  //       describe: 'the Gespage server address',
+  //     },
+  //   },
+  //   verifyPath: 'C:\\Program Files\\Gespage\\Popup',   // CONFIRM on a real install
+  //   describe: 'the Gespage Popup print client, pointed at your Gespage server',
   // },
 };
 

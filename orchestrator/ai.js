@@ -112,7 +112,10 @@ const TOOLS = [
 
   { name: 'deploy_software',
     description: "Install an approved product automatically on this PC. Takes ONLY a catalog productId from list_approved_software — you cannot supply a URL, filename or command. The agent downloads from Alpha Web's pinned source, verifies the file's checksum (aborting if it doesn't match), installs silently, and confirms it landed. The customer is asked to approve before it runs. If the product isn't in the catalog, fall back to Level 1 guidance instead.",
-    input_schema: { type: 'object', properties: { productId: { type: 'string', description: 'A productId from list_approved_software (e.g. "7zip").' } }, required: ['productId'], additionalProperties: false } },
+    input_schema: { type: 'object', properties: {
+      productId: { type: 'string', description: 'A productId from list_approved_software (e.g. "7zip").' },
+      settings: { type: 'object', description: 'Deployment settings the product requires, e.g. {"SERVER_IP": "gespage.customer.local"}. Only the settings that product declares are accepted, and each value is validated. NEVER invent one of these — ask the customer/deployer for the value and use exactly what they give you.', additionalProperties: { type: 'string' } },
+    }, required: ['productId'], additionalProperties: false } },
 
   { name: 'search_knowledge_base',
     description: "Search Alpha Web's product documentation (Gespage server + eTerminal manuals for each printer brand, prerequisites, deployment guides, port/firewall matrices, cPad guides). Returns short excerpts with the manual name and page number. USE THIS FIRST for anything Gespage- or print-management-specific — configuration values, supported versions, terminal setup per brand, error meanings, required ports — instead of answering from memory. Search with the customer's actual symptom or the setting you need.",

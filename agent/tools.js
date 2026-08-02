@@ -495,10 +495,40 @@ function sha256File(file) {
 // Tier-2. The AI may only pass a catalog ID — never a URL, filename or arguments.
 // Sequence: resolve entry -> download pinned URL -> verify sha256 (abort on
 // mismatch) -> run with the catalog's fixed args -> verify the install landed.
+// Validate deployment parameters (e.g. a Gespage server address) against the
+// catalog's schema. The model may supply the VALUE, but never the parameter name
+// and never a value that fails the catalog's pattern — so nothing can be
+// smuggled onto the command line.
+function validateParams(entry, supplied) {
+  const schema = entry.params || {};
+  const given = supplied || {};
+  const out = {};
+  for (const key of Object.keys(given)) {
+    if (!Object.prototype.hasOwnProperty.call(schema, key)) {
+      throw new Error(`'${key}' is not a parameter this installer accepts`);
+    }
+  }
+  for (const [key, rule] of Object.entries(schema)) {
+    const val = given[key];
+    if (val == null || val === '') {
+      if (rule.required) throw new Error(`missing required setting: ${key} (${rule.describe || key})`);
+      continue;
+    }
+    const s = String(val);
+    if (!new RegExp(rule.pattern).test(s)) {
+      throw new Error(`the value given for ${key} is not valid (${rule.describe || key})`);
+    }
+    out[key] = s;
+  }
+  return out;
+}
+
 async function deploySoftware(params) {
   const id = params && params.productId;
   const entry = getEntry(id);
   if (!entry) throw new Error(`'${id}' is not in the approved installer catalog`);
+  // Validate BEFORE downloading anything.
+  const deployParams = validateParams(entry, params && params.settings);
   if (!entry.sha256 || !/^[a-f0-9]{64}$/i.test(entry.sha256)) {
     // Fail closed: an entry without a valid pinned hash can never run.
     throw new Error(`catalog entry '${id}' has no valid pinned checksum — refusing to install`);
@@ -509,7 +539,8 @@ async function deploySoftware(params) {
   }
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awi-resolve-'));
-  const file = path.join(dir, 'installer.exe');
+  const isMsi = entry.installerType === 'msi';
+  const file = path.join(dir, isMsi ? 'installer.msi' : 'installer.exe');
   const cleanup = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
 
   try {
@@ -522,8 +553,14 @@ async function deploySoftware(params) {
       );
     }
 
+    // Build the command. Arguments come from the catalog; validated parameters
+    // are appended as KEY=VALUE. execFile (not a shell) so nothing is re-parsed.
+    const paramArgs = Object.entries(deployParams).map(([k, v]) => `${k}=${v}`);
+    const exe = isMsi ? 'msiexec.exe' : file;
+    const argv = isMsi ? ['/i', file, ...entry.args, ...paramArgs] : [...entry.args, ...paramArgs];
+
     await new Promise((resolve, reject) => {
-      execFile(file, entry.args, { timeout: INSTALL_TIMEOUT_MS, windowsHide: true }, (err) => {
+      execFile(exe, argv, { timeout: INSTALL_TIMEOUT_MS, windowsHide: true }, (err) => {
         if (err) return reject(new Error(`installer failed: ${err.message.split('\n')[0]}`));
         resolve();
       });
