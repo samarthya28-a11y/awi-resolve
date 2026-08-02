@@ -28,6 +28,7 @@ const TOOL_LABELS = {
   get_update_status: 'Checked Windows Update status',
   get_security_posture: 'Checked security protection status',
   get_threat_history: 'Reviewed past malware detections',
+  get_heimdal_detections: 'Read Heimdal endpoint security detections',
   list_local_admins: 'Listed administrator accounts',
   check_installed: 'Checked whether software is installed',
   list_approved_software: 'Listed approved software',
@@ -46,8 +47,11 @@ const TOOL_LABELS = {
   deploy_software: 'Installed approved software',
 };
 
-const READ_ONLY = new Set(Object.keys(TOOL_LABELS).filter((k) =>
-  /^(get_|list_|read_|check_|test_|search_)/.test(k)));
+// Read-only naming convention. Tested against the tool NAME rather than a fixed
+// list, so a newly added read-only tool can never be mislabelled as a change to
+// the machine (which would wrongly tell a customer we modified something).
+const READ_ONLY_PREFIX = /^(get_|list_|read_|check_|test_|search_)/;
+function isReadOnly(tool) { return READ_ONLY_PREFIX.test(tool); }
 
 function label(t) { return TOOL_LABELS[t] || t; }
 
@@ -65,7 +69,7 @@ function classify(toolCalls) {
       detail: describeInput(c.input), result: c.result || null, reason: c.reason || null,
     };
     if (c.status === 'ok') {
-      (READ_ONLY.has(c.tool) ? checks : changes).push(entry);
+      (isReadOnly(c.tool) ? checks : changes).push(entry);
       continue;
     }
     // Everything else is something that did NOT happen — record why, plainly.

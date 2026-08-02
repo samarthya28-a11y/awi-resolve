@@ -411,6 +411,62 @@ async function listLocalAdmins() {
   return { adminCount: a.length, admins: a };
 }
 
+// Third-party endpoint security (Heimdal). Alpha Web resells Heimdal, so its
+// detections matter as much as Defender's — and customers frequently ask
+// "is this flag real, or has it hit one of our own files?".
+//
+// Heimdal writes JSON-per-line logs; detections appear as
+//   "[WD][REPORT] New Infected file detected: <path>"
+// The [WD] prefix means Heimdal's Next-Gen Antivirus is orchestrating Windows
+// Defender on that machine, so its quarantine view surfaces Defender detections
+// (get_threat_history covers those) plus anything Heimdal holds itself.
+async function getHeimdalDetections() {
+  const out = await psJson(
+    "$root = Join-Path $env:ProgramData 'Heimdal Security'; " +
+    "if (-not (Test-Path $root)) { @{ installed=$false } | ConvertTo-Json; exit }; " +
+    // Version + which protection modules are actually running
+    "$svc = @(); Get-Service -ErrorAction SilentlyContinue | " +
+    "  Where-Object { $_.DisplayName -like 'Heimdal*' } | " +
+    "  ForEach-Object { $svc += @{ name=[string]$_.DisplayName; status=[string]$_.Status } }; " +
+    "$ver = $null; " +
+    // Detections from the antivirus logs (last 60 days of files, newest first)
+    "$dets = @(); " +
+    "$logs = Get-ChildItem (Join-Path $root 'HeimdalLogs\\Heimdal.Antivirus\\*.log') -ErrorAction SilentlyContinue | " +
+    "  Sort-Object LastWriteTime -Descending | Select-Object -First 60; " +
+    "foreach ($f in $logs) { " +
+    "  foreach ($line in (Select-String -Path $f.FullName -Pattern 'Infected file detected|quarantine.*restored|Threat removed' -ErrorAction SilentlyContinue)) { " +
+    "    try { $o = $line.Line | ConvertFrom-Json; " +
+    "      if ($null -eq $ver) { $ver = [string]$o.Version } " +
+    "      $dets += @{ at=[string]$o.Timestamp; message=[string]$o.Message } } catch {} } }; " +
+    "$dets = $dets | Sort-Object at -Descending | Select-Object -First 40; " +
+    "@{ installed=$true; version=$ver; services=$svc; detections=$dets } | ConvertTo-Json -Depth 5"
+  );
+  if (!out || out.installed === false) {
+    return { installed: false, note: 'Heimdal is not installed on this PC.' };
+  }
+  const raw = out.detections ? (Array.isArray(out.detections) ? out.detections : [out.detections]) : [];
+  // Pull the file path out of the log message so the AI can judge what was hit.
+  const detections = raw.map((d) => {
+    const m = /detected:\s*(.+?)\s*$/i.exec(d.message || '');
+    return {
+      at: d.at,
+      file: m ? m[1] : null,
+      viaWindowsDefender: /^\[WD\]/.test(d.message || ''),
+      message: (d.message || '').slice(0, 300),
+    };
+  });
+  const svc = out.services ? (Array.isArray(out.services) ? out.services : [out.services]) : [];
+  return {
+    installed: true,
+    version: out.version || null,
+    modulesRunning: svc.filter((s) => s.status === 'Running').length,
+    modules: svc,
+    detectionCount: detections.length,
+    detections,
+    note: 'Heimdal logs are retained for a limited period, so older quarantined items may not appear here — check the Heimdal console for the full list.',
+  };
+}
+
 // ---- Security hardening (Tier-2, consent-gated, SAFE DIRECTION ONLY) ----
 
 async function updateDefenderSignatures() {
@@ -608,6 +664,7 @@ const TOOLS = {
   get_security_posture:{ tier: 0, run: () => getSecurityPosture() },
   get_threat_history:  { tier: 0, run: () => getThreatHistory() },
   list_local_admins:   { tier: 0, run: () => listLocalAdmins() },
+  get_heimdal_detections: { tier: 0, run: () => getHeimdalDetections() },
   // Tier 1
   clear_dns_cache:     { tier: 1, run: () => clearDnsCache(), note: 'Flushing the DNS cache' },
   // Tier 2
