@@ -105,6 +105,19 @@ function startUiServer() {
         } else {
           toUI({ type: 'status', text: 'Not connected to the support service — please try again in a moment.' });
         }
+      } else if (m.type === 'attach_image') {
+        // A screenshot of an error dialog — often the only way to show a message
+        // that can't be copied as text.
+        const ok = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(m.mediaType);
+        if (!ok) {
+          toUI({ type: 'status', text: 'That image type is not supported — please send a PNG or JPG.' });
+        } else if (orchWs && orchWs.readyState === WebSocket.OPEN) {
+          log(`customer attached a screenshot (${m.mediaType})`);
+          orchWs.send(JSON.stringify({ type: 'attach_image', mediaType: m.mediaType, data: m.data }));
+          toUI({ type: 'action', text: 'Screenshot attached — the technician will look at it.' });
+        } else {
+          toUI({ type: 'status', text: 'Not connected to the support service — please try again in a moment.' });
+        }
       } else if (m.type === 'consent_response') {
         const resolve = pendingConsents.get(m.consentId);
         if (resolve) { pendingConsents.delete(m.consentId); resolve(m.decision === 'accepted' ? 'accepted' : 'declined'); }

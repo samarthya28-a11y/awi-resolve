@@ -148,14 +148,33 @@ const busyDevices = new Set();
 // Per-device customer-supplied documents: { pending: [] (not yet given to the
 // AI), all: [] (everything attached this session) }.
 const customerManuals = new Map();
+// Live conversations per device, so follow-ups ("done step 3", "here's the
+// error") continue the same session instead of starting cold.
+const conversations = new Map();   // deviceId -> { messages, lastAt, opened }
+const CONVERSATION_TTL_MS = 60 * 60 * 1000;   // an hour of quiet = new session
+// Screenshots/images attached but not yet handed to the AI.
+const pendingImages = new Map();   // deviceId -> [{mediaType, data}]
 
 async function runTicket(ws, deviceId, ticket) {
   if (busyDevices.has(deviceId)) return; // one session per machine at a time
   busyDevices.add(deviceId);
   try {
-    ws.send(JSON.stringify({ type: 'ai_update', text: 'Investigating your PC — this usually takes under a minute…' }));
-    const snap = await callTool(ws, deviceId, 'get_system_snapshot', {});
-    const snapshot = snap.status === 'ok' ? snap.result : null;
+    // Resume an in-flight conversation if the customer is replying to us.
+    const prior = conversations.get(deviceId);
+    const isFollowUp = !!(prior && (Date.now() - prior.lastAt) < CONVERSATION_TTL_MS);
+    const images = pendingImages.get(deviceId) || [];
+    pendingImages.delete(deviceId);
+
+    ws.send(JSON.stringify({ type: 'ai_update', text: isFollowUp
+      ? 'Picking up where we left off…'
+      : 'Investigating your PC — this usually takes under a minute…' }));
+
+    // Only re-snapshot at the start of a session; a follow-up already has context.
+    let snapshot = null;
+    if (!isFollowUp) {
+      const snap = await callTool(ws, deviceId, 'get_system_snapshot', {});
+      snapshot = snap.status === 'ok' ? snap.result : null;
+    }
 
     log(`AI technician (${MODEL}) working ticket: "${ticket}"`);
     const started = Date.now();
@@ -178,8 +197,17 @@ async function runTicket(ws, deviceId, ticket) {
         if (!q || !q.pending.length) return [];
         return q.pending.splice(0, q.pending.length);
       },
+      priorMessages: isFollowUp ? prior.messages : null,
+      images,
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
+    });
+
+    // Keep the thread alive for follow-ups.
+    conversations.set(deviceId, {
+      messages: result.messages || [],
+      lastAt: Date.now(),
+      opened: isFollowUp && prior ? prior.opened : new Date().toISOString(),
     });
 
     const durationSec = +((Date.now() - started) / 1000).toFixed(1);
@@ -368,6 +396,17 @@ wss.on('connection', (ws) => {
         audit({ event: 'posture_report', deviceId, hostname: msg.hostname });
         log(`posture report from ${msg.hostname || deviceId}`);
       } catch (e) { log(`posture record failed: ${e.message}`); }
+    }
+
+    // Screenshot from the customer — queued for the next message to the AI.
+    if (msg.type === 'attach_image' && deviceId) {
+      const list = pendingImages.get(deviceId) || [];
+      if (list.length < 4 && typeof msg.data === 'string' && msg.data.length < 6_000_000) {
+        list.push({ mediaType: msg.mediaType, data: msg.data });
+        pendingImages.set(deviceId, list);
+        audit({ event: 'image_attached', deviceId, mediaType: msg.mediaType });
+        log(`customer attached a screenshot (${msg.mediaType})`);
+      }
     }
 
     if (msg.type === 'attach_manual' && deviceId) {

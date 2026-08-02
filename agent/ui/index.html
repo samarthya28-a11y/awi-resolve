@@ -101,8 +101,8 @@
   </header>
   <div id="feed"></div>
   <footer>
-    <input type="file" id="file" accept=".txt,.md,.log,.csv,.json,.htm,.html" hidden />
-    <button id="attach" class="ghost" title="Attach a manual or guide (.txt, .md)">📎</button>
+    <input type="file" id="file" accept=".txt,.md,.log,.csv,.json,.htm,.html,.png,.jpg,.jpeg,.gif,.webp" hidden />
+    <button id="attach" class="ghost" title="Attach a manual, log, or a screenshot of an error">📎</button>
     <textarea id="box" rows="1" placeholder="Describe your computer problem…"></textarea>
     <button id="send">Get help</button>
   </footer>
@@ -228,12 +228,21 @@ fileInput.onchange = () => {
     fileInput.value = ''; return;
   }
   const reader = new FileReader();
+  const isImage = /^image\//.test(f.type);
   reader.onload = () => {
-    ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, text: String(reader.result || '') }));
+    if (isImage) {
+      // data URL -> base64 payload
+      const s = String(reader.result || '');
+      const data = s.slice(s.indexOf(',') + 1);
+      ws.send(JSON.stringify({ type: 'attach_image', mediaType: f.type, data }));
+      el('msg sys', 'Screenshot attached — describe what you were doing and press "Get help".');
+    } else {
+      ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, text: String(reader.result || '') }));
+    }
     fileInput.value = '';
   };
   reader.onerror = () => { el('msg sys', "Sorry, that file couldn't be read."); fileInput.value = ''; };
-  reader.readAsText(f);
+  if (isImage) reader.readAsDataURL(f); else reader.readAsText(f);
 };
 
 connect();
