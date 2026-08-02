@@ -58,7 +58,8 @@
     <path d="M22.5 33.2l7 7L44 25.5" fill="none" stroke="#15213b" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
   <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
   <span class="title"><span class="g">AWI Resolve</span> · Fleet Security</span>
-  <span class="meta" id="meta">loading…</span>
+  <a id="reportsLink" href="#" style="margin-left:auto;font-size:12.5px;font-weight:700;color:var(--muted);text-decoration:none;padding:7px 13px;border-radius:9px;border:1px solid var(--line)">Session Reports</a>
+  <span class="meta" id="meta" style="margin-left:14px">loading…</span>
 </header>
 <main>
   <div class="cards" id="cards"></div>
@@ -68,6 +69,7 @@
 
 <script>
 const token = new URLSearchParams(location.search).get('token') || '';
+document.getElementById('reportsLink').href = '/reports?token=' + encodeURIComponent(token);
 const esc = s => String(s == null ? '' : s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
 
 function ago(iso){

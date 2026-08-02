@@ -12,6 +12,7 @@ const { diagnose, MODEL } = require('./ai');
 const { loadManuals } = require('./manuals');
 const { kbStats } = require('./kb');
 const { recordPosture, fleetView } = require('./fleet');
+const { buildReport, saveReport, listReports, getReport } = require('./report');
 
 // The fleet dashboard exposes customer security posture, so it is never open.
 // Set RESOLVE_DASHBOARD_TOKEN to enable it; unset = dashboard disabled entirely.
@@ -193,8 +194,21 @@ async function runTicket(ws, deviceId, ticket) {
       durationSec, steps: result.steps, toolCalls: result.toolCalls,
       customerDeclined: declined, escalated, report: result.report,
     };
-    fs.writeFileSync(DIAGNOSIS_FILE, JSON.stringify(out, null, 2));
-    audit({ event: 'ticket_closed', deviceId, steps: result.steps, toolCount: result.toolCalls.length, declined, escalated });
+    fs.writeFileSync(DIAGNOSIS_FILE, JSON.stringify(out, null, 2));  // latest, for convenience
+
+    // Permanent per-session report — never overwritten (spec §7 / §9.4).
+    let reportId = null;
+    try {
+      const fleetDev = (fleetView().devices || []).find((d) => d.deviceId === deviceId);
+      const report = buildReport({ ...out, hostname: fleetDev ? fleetDev.hostname : null });
+      reportId = saveReport(report);
+      log(`session report saved: ${reportId} ` +
+          `(${report.outcome.checksRun} checks, ${report.outcome.changesMade} changes, ` +
+          `${report.outcome.actionsNotTaken} not done)`);
+    } catch (e) { log(`report save failed: ${e.message}`); }
+
+    audit({ event: 'ticket_closed', deviceId, reportId, steps: result.steps,
+            toolCount: result.toolCalls.length, declined, escalated });
 
     if (escalated) {
       // Spec §10: structured handoff for a human technician.
@@ -228,6 +242,7 @@ async function runTicket(ws, deviceId, ticket) {
 
 // HTTP server for the host's health check + the WebSocket upgrade endpoint.
 const DASHBOARD_FILE = path.join(__dirname, 'ui', 'fleet.html');
+const REPORTS_FILE = path.join(__dirname, 'ui', 'reports.html');
 
 // Constant-time-ish token compare
 function tokenOk(supplied) {
@@ -246,8 +261,9 @@ const httpServer = http.createServer((req, res) => {
     return res.end('AWI Resolve orchestrator OK');
   }
 
-  // ---- Fleet security dashboard (token-gated) ----
-  if (route === '/fleet' || route === '/api/fleet') {
+  // ---- Fleet security dashboard + session reports (token-gated) ----
+  if (route === '/fleet' || route === '/api/fleet' ||
+      route === '/reports' || route === '/api/reports' || route === '/api/report') {
     if (!DASHBOARD_TOKEN) {
       res.writeHead(404, { 'Content-Type': 'text/plain' });
       return res.end('Dashboard disabled (no RESOLVE_DASHBOARD_TOKEN set).');
@@ -259,12 +275,19 @@ const httpServer = http.createServer((req, res) => {
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       return res.end('Unauthorised.');
     }
-    if (route === '/api/fleet') {
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      return res.end(JSON.stringify(fleetView()));
+    const json = (obj, code = 200) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    if (route === '/api/fleet') return json(fleetView());
+    if (route === '/api/reports') return json({ reports: listReports(50) });
+    if (route === '/api/report') {
+      const r = getReport(url.searchParams.get('id'));
+      return r ? json(r) : json({ error: 'not found' }, 404);
     }
+    const page = route === '/reports' ? REPORTS_FILE : DASHBOARD_FILE;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    return fs.createReadStream(DASHBOARD_FILE).pipe(res);
+    return fs.createReadStream(page).pipe(res);
   }
 
   if (route === '/') {

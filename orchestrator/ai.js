@@ -166,6 +166,7 @@ HOW TO FINISH:
   DIAGNOSIS: what was wrong (1-2 sentences).
   FIX: what you did (or tried). If nothing could be done automatically, say what you recommend.
   OUTCOME: is it resolved now? If you verified it, say so. If not resolved, say what happens next (e.g. "escalated to a human technician").
+  NOT DONE: what you deliberately did NOT do, and why — anything you considered and rejected (e.g. "did not restart the print spooler: the queue was already empty, so it would have cancelled jobs for no benefit"), anything the customer declined, anything you lacked the tools or permissions for, and anything left for a person to do. If there is genuinely nothing, write "Nothing — everything needed was done." Never leave this section out; it is part of the customer's record.
   EVIDENCE: the key findings, briefly.
   CONFIDENCE: high / medium / low.
 - For a DEPLOYMENT / installation guidance request, do NOT use the DIAGNOSIS/FIX format. Instead give a clear, friendly, numbered step-by-step plan tailored to this machine, starting with a one-line note of what you'll help install and anything to have ready first, and ending with how to check it worked.
@@ -245,7 +246,22 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
       } else {
         agentResult = await callTool(tu.name, tu.input);
       }
-      toolCalls.push({ tool: tu.name, input: tu.input, status: agentResult.status });
+      // Full audit trail: what was attempted, what happened, and why not (spec §5.3).
+      let digest = null;
+      if (agentResult.status === 'ok' && agentResult.result != null) {
+        const r = agentResult.result;
+        digest = typeof r === 'object'
+          ? (r.action || JSON.stringify(r)).slice(0, 400)
+          : String(r).slice(0, 400);
+      }
+      toolCalls.push({
+        at: new Date().toISOString(),
+        tool: tu.name,
+        input: tu.input,
+        status: agentResult.status,
+        reason: agentResult.reason || null,   // why it did NOT run
+        result: digest,                       // what it found/did
+      });
       const ok = agentResult.status === 'ok';
       results.push({
         type: 'tool_result', tool_use_id: tu.id, is_error: !ok,
