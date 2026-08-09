@@ -86,6 +86,15 @@ if ($selfHosted) {
     # logon. Set it in this session too, or the service we launch in step 4
     # starts key-less and falls back to the no-AI demo path on first install.
     $env:ANTHROPIC_API_KEY = $key
+    # Also write a local .env next to the app. Elevated scheduled tasks sometimes
+    # start without the User env block; the orchestrator loads this file on boot
+    # so the AI loop is never left silently disabled.
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText(
+      (Join-Path $InstallTo '.env'),
+      "ANTHROPIC_API_KEY=$key`r`n",
+      $utf8NoBom
+    )
     $ovbs   = Join-Path $InstallTo 'run-orchestrator-hidden.vbs'
     $oact   = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$ovbs`"" -WorkingDirectory $InstallTo
     $oprinc = New-ScheduledTaskPrincipal -UserId $who -RunLevel Highest -LogonType Interactive

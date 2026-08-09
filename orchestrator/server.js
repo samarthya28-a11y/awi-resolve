@@ -77,14 +77,22 @@ const pendingCalls = new Map(); // callId -> resolve()
 const TOOL_TIMEOUT_MS = 120000;         // read-only + quick fixes (> 60s consent)
 const DEPLOY_TIMEOUT_MS = 480000;       // consent + download + install + verify
 
-// Read-only naming convention, same as the session report uses. Anything that
-// isn't a get_/list_/read_/check_/test_/search_ tool changes the machine, so an
-// unknown or newly added tool is treated as a change and gated — the safe way
-// round for a licence check to fail.
+// Read-only naming convention, same as the session report uses.
 const READ_ONLY_TOOL = /^(get_|list_|read_|check_|test_|search_)/;
+
+// Only these allowlisted change tools are licence-gated. Anything else that
+// isn't read-only (e.g. the safety probe's off-allowlist `run_shell`) must
+// reach the agent so it can refuse on-device — gating it here as "not
+// licensed" would hide a real allowlist failure behind a false FAIL.
+const KNOWN_CHANGE_TOOLS = new Set([
+  'clear_dns_cache', 'restart_service', 'clear_print_queue', 'enable_service',
+  'restart_explorer', 'renew_network', 'update_defender_signatures',
+  'run_security_scan', 'enable_protection', 'deploy_software', 'clean_temp_files',
+]);
 
 function licenseAllows(deviceId, toolId) {
   if (READ_ONLY_TOOL.test(toolId)) return { allowed: true };
+  if (!KNOWN_CHANGE_TOOLS.has(toolId)) return { allowed: true };
   const lic = deviceLicenses.get(deviceId);
   const caps = lic ? lic.caps : null;
   if (!caps || !caps.fixes) {
@@ -192,7 +200,16 @@ const CONVERSATION_TTL_MS = 60 * 60 * 1000;   // an hour of quiet = new session
 const pendingImages = new Map();   // deviceId -> [{mediaType, data}]
 
 async function runTicket(ws, deviceId, ticket) {
-  if (busyDevices.has(deviceId)) return; // one session per machine at a time
+  if (busyDevices.has(deviceId)) {
+    // A second click while the first ticket is still running — tell the UI so
+    // it does not sit forever on "Working…" with no reply.
+    ws.send(JSON.stringify({
+      type: 'ai_update',
+      text: 'Still working on your previous request — please wait a moment, then try again.',
+    }));
+    ws.send(JSON.stringify({ type: 'ticket_done' }));
+    return;
+  }
   busyDevices.add(deviceId);
   try {
     // Resume an in-flight conversation if the customer is replying to us.
@@ -484,8 +501,18 @@ wss.on('connection', (ws) => {
       log(`customer attached "${doc.title}" (${doc.text.length} chars)`);
     }
 
-    if (msg.type === 'open_ticket' && deviceId && API_KEY) {
+    if (msg.type === 'open_ticket' && deviceId) {
       const ticket = String(msg.text || '').slice(0, 2000);
+      if (!API_KEY) {
+        // Never leave the customer staring at "Working…" with no reply.
+        log(`ticket ignored — ANTHROPIC_API_KEY is not set on this service`);
+        ws.send(JSON.stringify({
+          type: 'ai_update',
+          text: 'The support service is running without its AI key, so I cannot help yet. Please ask Alpha Web to check the Resolve service setup.',
+        }));
+        ws.send(JSON.stringify({ type: 'ticket_done' }));
+        return;
+      }
       log(`ticket opened by ${deviceId}: "${ticket}"`);
       audit({ event: 'ticket_opened', deviceId });
       runTicket(ws, deviceId, ticket).catch((e) => log(`ticket run error: ${e.message}`));

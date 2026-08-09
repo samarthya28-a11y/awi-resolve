@@ -19,7 +19,12 @@ const { TOOLS } = require('./tools');
 // orchestrator without editing code or setting env vars.
 function loadConfig() {
   for (const p of [path.join(__dirname, '..', 'config.json'), path.join(__dirname, 'config.json')]) {
-    try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { /* try next */ }
+    try {
+      // Strip a UTF-8 BOM if present — Windows editors / PowerShell often write one,
+      // and JSON.parse rejects it, which silently drops the licence key.
+      const raw = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
+      return JSON.parse(raw);
+    } catch { /* try next */ }
   }
   return {};
 }
@@ -128,6 +133,15 @@ function startUiServer() {
       }
     });
     client.on('close', () => uiClients.delete(client));
+  });
+  httpServer.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      log(`support window port ${UI_PORT} is already in use — Resolve is probably already running.`);
+      log(`Open http://127.0.0.1:${UI_PORT} (or close the other copy and try again).`);
+      process.exit(1);
+    }
+    log(`support window failed to start: ${e.message}`);
+    process.exit(1);
   });
   httpServer.listen(UI_PORT, '127.0.0.1', () => log(`support window available at http://127.0.0.1:${UI_PORT}`));
 }

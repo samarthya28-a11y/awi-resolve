@@ -1,0 +1,7 @@
+{
+  "_comment": "Local test config for this PC. Points at the local orchestrator.",
+  "orchestratorUrl": "ws://127.0.0.1:8787",
+  "enrollmentSecret": "",
+  "licenseKey": "RSLIC1-eyJwYXlsb2FkIjp7ImxpY2Vuc2VJZCI6IjNlZmU3M2E3LTQ1OTgtNGU4Mi04YmYyLWRjZGNiYWNlYTc4YiIsImN1c3RvbWVyIjoiQWxwaGEgV2ViIChsb2NhbCB0ZXN0KSIsInBsYW4iOiJ0cmlhbCIsInNlYXRzIjoxLCJpc3N1ZWRBdCI6IjIwMjYtMDgtMDlUMTM6Mjg6MDUuNzY3WiIsImV4cGlyZXNBdCI6IjIwMjYtMDktMDhUMTM6Mjg6MDUuNzY3WiJ9LCJzaWduYXR1cmUiOiJNRVVDSUgwMnZwbW1GdDE5OVV1MmJEazJzV2hxWngvdkczNzVhSk1WeUJKYWRUcWlBaUVBeDdDb1lnSllVaUxEMFN1RHBIeWhWV0pPMUJvb2NTdWF2enZMNjVjamFybz0ifQ",
+  "uiPort": 8790
+}
