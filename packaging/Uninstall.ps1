@@ -3,6 +3,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 $AppName   = 'AWI Resolve'
 $TaskName  = 'AWI Resolve Agent'
+$SvcTaskName = 'AWI Resolve Service'
 $InstallTo = Join-Path $env:ProgramFiles $AppName
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] `
@@ -14,10 +15,12 @@ if (-not $isAdmin) {
   return
 }
 
-# stop it, remove auto-start
+# stop it, remove auto-start (agent + the self-hosted support service)
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+Unregister-ScheduledTask -TaskName $SvcTaskName -Confirm:$false
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
-  Where-Object { $_.CommandLine -like "*$AppName*agent.js*" } |
+  Where-Object { $_.CommandLine -like "*$AppName*agent.js*" -or
+                 $_.CommandLine -like "*$AppName*server.js*" } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
 
 # remove shortcuts

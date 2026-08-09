@@ -88,7 +88,10 @@ function startUiServer() {
           toUI({ type: 'status', text: 'Connecting you to the AI technician…' });
           orchWs.send(JSON.stringify({ type: 'open_ticket', text: String(m.text || '').slice(0, 2000) }));
         } else {
-          toUI({ type: 'status', text: 'Support service is offline right now. Please try again shortly.' });
+          // The agent retries the service every 3s, so this is nearly always a
+          // cold start rather than a real outage — say so, instead of implying
+          // the customer should give up.
+          toUI({ type: 'status', text: 'Still starting the support service — this takes a few seconds after you sign in. Press "Get help" again in a moment.' });
           toUI({ type: 'done' });
         }
       } else if (m.type === 'attach_manual') {

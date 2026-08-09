@@ -17,8 +17,16 @@ Copy-Item (Get-Command node).Source (Join-Path $Out 'node.exe')
 Copy-Item "$Root\agent\agent.js","$Root\agent\tools.js" "$Out\agent"
 Copy-Item "$Root\agent\ui" "$Out\agent\ui" -Recurse
 
-# Only runtime dependency
+# Support service (orchestrator). Shipped so a self-hosted install can run the
+# whole product on one PC; a customer pointed at a hosted connector simply never
+# starts it. Runtime state in orchestrator\data is deliberately not shipped.
+New-Item -ItemType Directory -Force -Path "$Out\orchestrator" | Out-Null
+Get-ChildItem "$Root\orchestrator\*.js" | Copy-Item -Destination "$Out\orchestrator"
+Copy-Item "$Root\orchestrator\ui" "$Out\orchestrator\ui" -Recurse
+
+# Runtime dependencies
 Copy-Item "$Root\node_modules\ws" "$Out\node_modules\ws" -Recurse
+Copy-Item "$Root\node_modules\@anthropic-ai" "$Out\node_modules\@anthropic-ai" -Recurse
 
 # Product icon (shortcut / taskbar). Regenerate if missing.
 if (-not (Test-Path "$Pkg\awi-resolve.ico")) {
@@ -28,7 +36,8 @@ Copy-Item "$Pkg\awi-resolve.ico" $Out
 
 # Config + installer payload
 Copy-Item "$Pkg\config.template.json" (Join-Path $Out 'config.json')
-Copy-Item "$Pkg\run-agent-hidden.vbs","$Pkg\Install.ps1","$Pkg\Uninstall.ps1","$Pkg\README.txt" $Out
+Copy-Item "$Pkg\run-agent-hidden.vbs","$Pkg\run-orchestrator-hidden.vbs",`
+          "$Pkg\Install.ps1","$Pkg\Uninstall.ps1","$Pkg\README.txt" $Out
 Copy-Item "$Pkg\Install AWI Resolve.cmd" $Out
 
 $size = [math]::Round(((Get-ChildItem $Out -Recurse | Measure-Object Length -Sum).Sum)/1MB,0)
