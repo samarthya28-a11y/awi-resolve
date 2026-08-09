@@ -39,17 +39,21 @@ function loadLibrary(customerId) {
   const id = slugify(customerId);
   const p = libPath(id);
   if (!fs.existsSync(p)) {
-    return { customerId: id, packages: [], updatedAt: null };
+    return { customerId: id, name: id, packages: [], allowFullItSupport: false, updatedAt: null };
   }
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, ''));
     return {
       customerId: id,
+      name: String(raw.name || id).slice(0, 120),
       packages: Array.isArray(raw.packages) ? raw.packages : [],
+      // Dual gate with licence plan `full` — IT admin must also enable this.
+      allowFullItSupport: Boolean(raw.allowFullItSupport),
       updatedAt: raw.updatedAt || null,
+      settingsUpdatedBy: raw.settingsUpdatedBy || null,
     };
   } catch {
-    return { customerId: id, packages: [], updatedAt: null };
+    return { customerId: id, name: id, packages: [], allowFullItSupport: false, updatedAt: null };
   }
 }
 
@@ -57,11 +61,45 @@ function saveLibrary(lib) {
   const id = slugify(lib.customerId);
   const out = {
     customerId: id,
+    name: String(lib.name || id).slice(0, 120),
+    allowFullItSupport: Boolean(lib.allowFullItSupport),
+    settingsUpdatedBy: lib.settingsUpdatedBy || null,
     updatedAt: new Date().toISOString(),
     packages: lib.packages || [],
   };
   fs.writeFileSync(libPath(id), JSON.stringify(out, null, 2));
   return out;
+}
+
+function updateSettings(customerId, settings, actor) {
+  const id = slugify(customerId);
+  if (!id) throw new Error('customerId required');
+  const lib = loadLibrary(id);
+  if (settings && typeof settings === 'object') {
+    if (Object.prototype.hasOwnProperty.call(settings, 'allowFullItSupport')) {
+      lib.allowFullItSupport = Boolean(settings.allowFullItSupport);
+    }
+    if (Object.prototype.hasOwnProperty.call(settings, 'name') && settings.name) {
+      lib.name = String(settings.name).trim().slice(0, 120);
+    }
+  }
+  lib.settingsUpdatedBy = actor || null;
+  return saveLibrary(lib);
+}
+
+function isFullItSupportAllowed(customerId) {
+  const id = slugify(customerId);
+  if (!id) return false;
+  return Boolean(loadLibrary(id).allowFullItSupport);
+}
+
+function publicSettings(lib) {
+  return {
+    customerId: lib.customerId,
+    name: lib.name || lib.customerId,
+    allowFullItSupport: Boolean(lib.allowFullItSupport),
+    updatedAt: lib.updatedAt || null,
+  };
 }
 
 function validatePackageInput(input, { requireId = false } = {}) {
@@ -241,6 +279,9 @@ module.exports = {
   removePackage,
   listAllPublic,
   publicPackage,
+  updateSettings,
+  isFullItSupportAllowed,
+  publicSettings,
   loadAdminTokens,
   ensureAdminToken,
   adminTokenOk,

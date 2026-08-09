@@ -13,6 +13,11 @@ const { getEntry, listProducts } = require('./catalog');
 
 const PS_TIMEOUT_MS = 30000;
 const INSTALL_TIMEOUT_MS = 300000; // 5 min for an installer to finish
+// Full IT Support (Tier-2) — consented arbitrary PowerShell, hard caps.
+const FULL_PS_TIMEOUT_MS = 90000;
+const FULL_PS_MAX_COMMAND = 4000;
+const FULL_PS_MAX_OUTPUT = 32 * 1024;
+const FULL_PS_MAX_BUFFER = 512 * 1024;
 
 // Fixed list of services the agent may inspect (Tier-0) — spec §6.
 const ALLOWED_SERVICES = ['Spooler', 'Dhcp', 'Dnscache', 'W32Time', 'wuauserv', 'LanmanWorkstation'];
@@ -725,6 +730,56 @@ async function deployPinnedSoftware(params) {
   }
 }
 
+// Full IT Support only — orchestrator dual-gates (licence plan `full` + org
+// admin allowFullItSupport) before this tool is ever sent to the agent.
+async function runPowerShell(params) {
+  const command = String((params && params.command) || '').trim();
+  if (!command) throw new Error('command is required');
+  if (command.length > FULL_PS_MAX_COMMAND) {
+    throw new Error(`command exceeds ${FULL_PS_MAX_COMMAND} character limit`);
+  }
+
+  // EncodedCommand avoids shell metacharacter issues; execFile (not a shell).
+  const encoded = Buffer.from(command, 'utf16le').toString('base64');
+  const started = Date.now();
+  const result = await new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
+      { timeout: FULL_PS_TIMEOUT_MS, maxBuffer: FULL_PS_MAX_BUFFER, windowsHide: true },
+      (err, stdout, stderr) => {
+        const trunc = (s) => {
+          const t = String(s || '');
+          if (t.length <= FULL_PS_MAX_OUTPUT) return { text: t, truncated: false };
+          return { text: t.slice(0, FULL_PS_MAX_OUTPUT) + '\n…[output truncated]', truncated: true };
+        };
+        const out = trunc(stdout);
+        const errOut = trunc(stderr);
+        const exitCode = err && typeof err.code === 'number' ? err.code
+          : (err && err.killed ? null : 0);
+        resolve({
+          exitCode: exitCode == null ? -1 : exitCode,
+          timedOut: !!(err && err.killed),
+          stdout: out.text,
+          stderr: errOut.text,
+          stdoutTruncated: out.truncated,
+          stderrTruncated: errOut.truncated,
+          durationMs: Date.now() - started,
+          error: err && !err.killed ? String(err.message || '').split('\n')[0] : null,
+        });
+      }
+    );
+  });
+
+  return {
+    ...result,
+    command,
+    action: result.timedOut
+      ? `PowerShell timed out after ${FULL_PS_TIMEOUT_MS / 1000}s (command was not completed).`
+      : `Ran consented PowerShell command (exit ${result.exitCode}).`,
+  };
+}
+
 // The complete allowlist. Adding a tool here requires a spec version bump (§6).
 //   tier 0 = read-only diagnostic — runs silently.
 //   tier 1 = low-risk fix       — runs without a prompt, shown live in the feed.
@@ -854,6 +909,18 @@ const TOOLS = {
       "I'd like to delete temporary files older than a day to free up disk space. " +
       'Windows and your apps automatically recreate any they still need, and nothing ' +
       'personal is touched. Is that OK?',
+  },
+  // Full IT Support only (licence plan `full` + org admin allowFullItSupport).
+  // Consent always shows the exact command — never AI-authored prose alone.
+  run_powershell: {
+    tier: 2,
+    run: (p) => runPowerShell(p),
+    consent: (p) => {
+      const cmd = String((p && p.command) || '').trim();
+      const shown = cmd.length > 1200 ? `${cmd.slice(0, 1200)}\n…[command truncated in prompt; full command is audited]` : cmd;
+      return `Full IT Support wants to run this PowerShell command on your PC:\n\n${shown || '(empty)'}\n\n` +
+             'This can change software, files, or settings on this machine. Approve only if you trust it. Is that OK?';
+    },
   },
 };
 

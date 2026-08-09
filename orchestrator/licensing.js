@@ -34,10 +34,12 @@ function loadPublicKey() {
 // even with no licence at all: a customer mid-incident should never be left
 // unable to find out what is wrong, and it makes the trial genuinely useful.
 const PLANS = {
-  none:     { label: 'Unlicensed',  diagnostics: true, fixes: false, deployment: false, security: false },
-  trial:    { label: 'Trial',       diagnostics: true, fixes: true,  deployment: true,  security: true },
-  standard: { label: 'Standard',    diagnostics: true, fixes: true,  deployment: false, security: true },
-  pro:      { label: 'Pro',         diagnostics: true, fixes: true,  deployment: true,  security: true },
+  none:     { label: 'Unlicensed',      diagnostics: true, fixes: false, deployment: false, security: false, fullSupport: false },
+  trial:    { label: 'Trial',           diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: false },
+  standard: { label: 'Standard',        diagnostics: true, fixes: true,  deployment: false, security: true,  fullSupport: false },
+  pro:      { label: 'Pro',             diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: false },
+  // Full IT Support — allowlisted tools PLUS consented PowerShell (org admin must also enable).
+  full:     { label: 'Full IT Support', diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: true },
 };
 
 function decode(key) {

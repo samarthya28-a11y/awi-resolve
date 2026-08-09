@@ -51,6 +51,17 @@
 </header>
 <main>
   <div class="card">
+    <h2>Organisation settings</h2>
+    <p class="help">Full IT Support lets Resolve run consented PowerShell for legitimate IT work beyond the fixed allowlist.
+      Requires a <strong>Full</strong> licence on the device <em>and</em> this toggle. Leave off unless your IT policy allows it.</p>
+    <label style="display:flex;align-items:center;gap:10px;text-transform:none;letter-spacing:0;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer">
+      <input type="checkbox" id="allowFullItSupport" style="width:auto" />
+      Allow Full IT Support (consented PowerShell) for this organisation
+    </label>
+    <button class="ghost" id="saveSettings" style="margin-top:12px">Save settings</button>
+    <div class="msg" id="settingsMsg"></div>
+  </div>
+  <div class="card">
     <h2>IT admin — approve packages for your organisation</h2>
     <p class="help">Store the setup manual plus an HTTPS .exe/.msi download link and SHA-256 checksum.
       Installer files stay on the vendor site (we do not host them). End users can only auto-install packages you enable here.</p>
@@ -89,6 +100,8 @@ const token = qs.get('token') || '';
 const meta = document.getElementById('meta');
 const list = document.getElementById('list');
 const formMsg = document.getElementById('formMsg');
+const settingsMsg = document.getElementById('settingsMsg');
+const allowFull = document.getElementById('allowFullItSupport');
 meta.textContent = customerId ? ('Org: ' + customerId) : 'missing customerId';
 
 const api = (path, opts={}) => {
@@ -107,6 +120,7 @@ function esc(s){ return String(s==null?'':s).replace(/[<>&]/g,c=>({ '<':'&lt;','
 
 async function refresh(){
   const data = await api('/api/admin/software');
+  if (data.settings) allowFull.checked = !!data.settings.allowFullItSupport;
   if (!data.packages.length) {
     list.innerHTML = '<p class="help">No packages yet — add the first one above.</p>';
     return;
@@ -139,6 +153,24 @@ async function refresh(){
     refresh();
   });
 }
+
+document.getElementById('saveSettings').onclick = async () => {
+  settingsMsg.className = 'msg';
+  settingsMsg.textContent = 'Saving…';
+  try {
+    await api('/api/admin/software/settings', {
+      method: 'POST',
+      body: JSON.stringify({ allowFullItSupport: allowFull.checked }),
+    });
+    settingsMsg.className = 'msg ok';
+    settingsMsg.textContent = allowFull.checked
+      ? 'Full IT Support enabled for this org (devices still need a Full licence).'
+      : 'Full IT Support disabled for this org.';
+  } catch (e) {
+    settingsMsg.className = 'msg err';
+    settingsMsg.textContent = e.message;
+  }
+};
 
 document.getElementById('save').onclick = async () => {
   formMsg.className = 'msg'; formMsg.textContent = 'Saving…';

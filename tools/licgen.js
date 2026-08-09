@@ -19,7 +19,7 @@ const path = require('path');
 
 const PRIV = path.join(__dirname, 'licensing-key.pem');
 const PUB = path.join(__dirname, '..', 'orchestrator', 'licensing-key.pub');
-const PLANS = ['trial', 'standard', 'pro'];
+const PLANS = ['trial', 'standard', 'pro', 'full'];
 
 function init() {
   if (fs.existsSync(PRIV)) {

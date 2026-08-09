@@ -22,12 +22,14 @@ echo.
 echo   1. Trial     - everything, short expiry  (default 15 days)
 echo   2. Standard  - diagnostics + fixes, no software deployment
 echo   3. Pro       - everything including deployment
+echo   4. Full      - Pro + consented PowerShell (IT admin must also enable)
 echo.
-set /p PLANNO="Plan [1/2/3]             : "
+set /p PLANNO="Plan [1/2/3/4]           : "
 if "%PLANNO%"=="1" set PLAN=trial
 if "%PLANNO%"=="2" set PLAN=standard
 if "%PLANNO%"=="3" set PLAN=pro
-if "%PLAN%"=="" ( echo Pick 1, 2 or 3. & pause & exit /b 1 )
+if "%PLANNO%"=="4" set PLAN=full
+if "%PLAN%"=="" ( echo Pick 1, 2, 3 or 4. & pause & exit /b 1 )
 
 set /p SEATS="Number of PCs (seats)    : "
 if "%SEATS%"=="" set SEATS=1

@@ -113,3 +113,12 @@ create table org_software (
 );
 
 create index org_software_customer_idx on org_software (customer_id) where enabled;
+
+-- Org settings (file-backed in pilot under orchestrator/data/org-libraries/*.json).
+-- Full IT Support requires licence plan `full` AND allow_full_it_support = true.
+create table org_settings (
+  customer_id            uuid primary key references customers(id),
+  allow_full_it_support  boolean not null default false,
+  updated_at             timestamptz default now(),
+  updated_by             text
+);

@@ -154,6 +154,7 @@ async function resolveCloudTool(ws, deviceId, customerId, name, input) {
 // for a download + installer run (agent caps the installer at 5 min).
 const TOOL_TIMEOUT_MS = 120000;         // read-only + quick fixes (> 60s consent)
 const DEPLOY_TIMEOUT_MS = 480000;       // consent + download + install + verify
+const FULL_SHELL_TIMEOUT_MS = 180000;   // consent 60s + PowerShell up to 90s + buffer
 
 // Read-only naming convention, same as the session report uses.
 const READ_ONLY_TOOL = /^(get_|list_|read_|check_|test_|search_)/;
@@ -166,7 +167,7 @@ const KNOWN_CHANGE_TOOLS = new Set([
   'clear_dns_cache', 'restart_service', 'clear_print_queue', 'enable_service',
   'restart_explorer', 'renew_network', 'update_defender_signatures',
   'run_security_scan', 'enable_protection', 'deploy_software',
-  'deploy_pinned_software', 'clean_temp_files',
+  'deploy_pinned_software', 'clean_temp_files', 'run_powershell',
 ]);
 
 function licenseAllows(deviceId, toolId) {
@@ -181,6 +182,19 @@ function licenseAllows(deviceId, toolId) {
   }
   if ((toolId === 'deploy_software' || toolId === 'deploy_pinned_software') && !caps.deployment) {
     return { allowed: false, why: `Software deployment is not included in the ${caps.label} plan.` };
+  }
+  if (toolId === 'run_powershell') {
+    if (!caps.fullSupport) {
+      return { allowed: false, why: `Full IT Support (consented PowerShell) is not included in the ${caps.label} plan.` };
+    }
+    const customerId = deviceCustomers.get(deviceId);
+    if (!orgLibrary.isFullItSupportAllowed(customerId)) {
+      return {
+        allowed: false,
+        why: 'Full IT Support is not enabled by this organisation\'s IT admin. ' +
+             'They can turn it on in the Approved Software / org admin page (allow Full IT Support).',
+      };
+    }
   }
   return { allowed: true };
 }
@@ -203,7 +217,8 @@ function callTool(ws, deviceId, toolId, params) {
     audit({ event: 'tool_call_sent', deviceId, toolId, params });
     ws.send(JSON.stringify({ type: 'tool_call', callId, toolId, params }));
     const ms = (toolId === 'deploy_software' || toolId === 'deploy_pinned_software')
-      ? DEPLOY_TIMEOUT_MS : TOOL_TIMEOUT_MS;
+      ? DEPLOY_TIMEOUT_MS
+      : (toolId === 'run_powershell' ? FULL_SHELL_TIMEOUT_MS : TOOL_TIMEOUT_MS);
     setTimeout(() => {
       if (pendingCalls.delete(callId)) resolve({ status: 'timeout', toolId });
     }, ms);
@@ -312,6 +327,9 @@ async function runTicket(ws, deviceId, ticket) {
     log(`AI technician (${MODEL}) working ticket: "${ticket}"`);
     const started = Date.now();
     const customerId = deviceCustomers.get(deviceId) || null;
+    const lic = deviceLicenses.get(deviceId);
+    const fullItSupport = !!(lic && lic.caps && lic.caps.fullSupport
+      && orgLibrary.isFullItSupportAllowed(customerId));
     const result = await diagnose({
       apiKey: API_KEY,
       ticket,
@@ -334,6 +352,7 @@ async function runTicket(ws, deviceId, ticket) {
       priorMessages: isFollowUp ? prior.messages : null,
       images,
       resolveCloudTool: (name, input) => resolveCloudTool(ws, deviceId, customerId, name, input),
+      fullItSupport,
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
     });
@@ -480,7 +499,22 @@ const httpServer = http.createServer(async (req, res) => {
         return fs.createReadStream(ADMIN_SOFTWARE_FILE).pipe(res);
       }
       if (route === '/api/admin/software' && req.method === 'GET') {
-        return json({ customerId, packages: orgLibrary.listAllPublic(customerId) });
+        const lib = orgLibrary.loadLibrary(customerId);
+        return json({
+          customerId,
+          settings: orgLibrary.publicSettings(lib),
+          packages: orgLibrary.listAllPublic(customerId),
+        });
+      }
+      if (route === '/api/admin/software/settings' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const saved = orgLibrary.updateSettings(customerId, body, 'it-admin');
+        audit({
+          event: 'org_settings_updated',
+          customerId,
+          allowFullItSupport: saved.allowFullItSupport,
+        });
+        return json({ ok: true, settings: orgLibrary.publicSettings(saved) });
       }
       if (route === '/api/admin/software' && req.method === 'POST') {
         const body = await readJsonBody(req);
