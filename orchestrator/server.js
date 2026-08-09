@@ -87,7 +87,8 @@ const READ_ONLY_TOOL = /^(get_|list_|read_|check_|test_|search_)/;
 const KNOWN_CHANGE_TOOLS = new Set([
   'clear_dns_cache', 'restart_service', 'clear_print_queue', 'enable_service',
   'restart_explorer', 'renew_network', 'update_defender_signatures',
-  'run_security_scan', 'enable_protection', 'deploy_software', 'clean_temp_files',
+  'run_security_scan', 'enable_protection', 'deploy_software',
+  'deploy_from_manual_url', 'clean_temp_files',
 ]);
 
 function licenseAllows(deviceId, toolId) {
@@ -100,7 +101,7 @@ function licenseAllows(deviceId, toolId) {
       ? `This machine's licence expired on ${String(lic.expiresAt).slice(0, 10)}.`
       : 'This machine does not have an active Resolve licence.' };
   }
-  if (toolId === 'deploy_software' && !caps.deployment) {
+  if ((toolId === 'deploy_software' || toolId === 'deploy_from_manual_url') && !caps.deployment) {
     return { allowed: false, why: `Software deployment is not included in the ${caps.label} plan.` };
   }
   return { allowed: true };
@@ -123,7 +124,8 @@ function callTool(ws, deviceId, toolId, params) {
     pendingCalls.set(callId, resolve);
     audit({ event: 'tool_call_sent', deviceId, toolId, params });
     ws.send(JSON.stringify({ type: 'tool_call', callId, toolId, params }));
-    const ms = toolId === 'deploy_software' ? DEPLOY_TIMEOUT_MS : TOOL_TIMEOUT_MS;
+    const ms = (toolId === 'deploy_software' || toolId === 'deploy_from_manual_url')
+      ? DEPLOY_TIMEOUT_MS : TOOL_TIMEOUT_MS;
     setTimeout(() => {
       if (pendingCalls.delete(callId)) resolve({ status: 'timeout', toolId });
     }, ms);

@@ -516,6 +516,7 @@ function checkInstalled(params) {
 }
 
 // Download over HTTPS to a file, following redirects, with a size cap.
+// Redirects must stay on https — never follow an http/file/unc hop.
 function download(url, dest, maxBytes = 200 * 1024 * 1024, redirectsLeft = 5) {
   return new Promise((resolve, reject) => {
     if (!/^https:\/\//i.test(url)) return reject(new Error('installer URL must be https'));
@@ -523,7 +524,17 @@ function download(url, dest, maxBytes = 200 * 1024 * 1024, redirectsLeft = 5) {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume();
         if (redirectsLeft <= 0) return reject(new Error('too many redirects'));
-        return resolve(download(res.headers.location, dest, maxBytes, redirectsLeft - 1));
+        let next = res.headers.location;
+        try {
+          // Relative Location headers resolve against the current URL.
+          next = new URL(next, url).href;
+        } catch {
+          return reject(new Error('redirect target is not a valid URL'));
+        }
+        if (!/^https:\/\//i.test(next)) {
+          return reject(new Error('redirect left HTTPS — refusing to follow'));
+        }
+        return resolve(download(next, dest, maxBytes, redirectsLeft - 1));
       }
       if (res.statusCode !== 200) { res.resume(); return reject(new Error(`download failed: HTTP ${res.statusCode}`)); }
       let bytes = 0;
@@ -637,6 +648,91 @@ async function deploySoftware(params) {
   }
 }
 
+// ---- Level 2b: install from a customer-shared manual URL (v1.2) ----
+// The AI may pass a URL taken from an attached setup guide. Agent still
+// enforces: HTTPS only, .exe/.msi only, fixed silent args (never model-
+// supplied), optional sha256 verify, size cap, temp cleanup. No free-form shell.
+
+const FORBIDDEN_INSTALL_EXT = /\.(ps1|bat|cmd|vbs|js|jse|wsf|wsh|msi\.bat|zip|7z|rar|tar|gz|iso|img|scr|com|pif)(\?|$)/i;
+
+function classifyManualInstaller(url) {
+  let parsed;
+  try { parsed = new URL(url); } catch { throw new Error('installer URL is not valid'); }
+  if (parsed.protocol !== 'https:') throw new Error('installer URL must be https');
+  const pathname = decodeURIComponent(parsed.pathname || '');
+  const base = path.basename(pathname).split('?')[0];
+  if (!base || FORBIDDEN_INSTALL_EXT.test(pathname) || FORBIDDEN_INSTALL_EXT.test(base)) {
+    throw new Error('refusing this file type — only .exe or .msi installers are allowed');
+  }
+  const lower = base.toLowerCase();
+  if (lower.endsWith('.msi')) return { kind: 'msi', fileName: base || 'installer.msi', host: parsed.host, href: parsed.href };
+  if (lower.endsWith('.exe')) return { kind: 'exe', fileName: base || 'installer.exe', host: parsed.host, href: parsed.href };
+  throw new Error('installer URL must end in .exe or .msi');
+}
+
+async function deployFromManualUrl(params) {
+  const productName = String((params && params.productName) || '').trim().slice(0, 120);
+  if (!productName) throw new Error('productName is required');
+  const url = String((params && params.url) || '').trim();
+  if (!url) throw new Error('url is required');
+  const info = classifyManualInstaller(url);
+
+  let expectHash = null;
+  const rawHash = params && params.sha256 != null ? String(params.sha256).trim() : '';
+  if (rawHash) {
+    if (!/^[a-f0-9]{64}$/i.test(rawHash)) {
+      throw new Error('sha256 must be a 64-character hex digest when provided');
+    }
+    expectHash = rawHash.toLowerCase();
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awi-resolve-manual-'));
+  const file = path.join(dir, info.kind === 'msi' ? 'installer.msi' : 'installer.exe');
+  const cleanup = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
+
+  try {
+    const bytes = await download(info.href, file);
+    const digest = await sha256File(file);
+    let checksumVerified = false;
+    if (expectHash) {
+      if (digest !== expectHash) {
+        cleanup();
+        throw new Error(
+          `SECURITY: installer checksum mismatch for ${productName} — expected ${expectHash}, got ${digest}. Installation aborted.`
+        );
+      }
+      checksumVerified = true;
+    }
+
+    const exe = info.kind === 'msi' ? 'msiexec.exe' : file;
+    const argv = info.kind === 'msi' ? ['/i', file, '/qn'] : ['/S'];
+
+    await new Promise((resolve, reject) => {
+      execFile(exe, argv, { timeout: INSTALL_TIMEOUT_MS, windowsHide: true }, (err) => {
+        if (err) return reject(new Error(`installer failed: ${err.message.split('\n')[0]}`));
+        resolve();
+      });
+    });
+
+    cleanup();
+    return {
+      done: true,
+      product: productName,
+      url: info.href,
+      host: info.host,
+      downloadedBytes: bytes,
+      checksumVerified,
+      checksumProvided: !!expectHash,
+      action: checksumVerified
+        ? `Downloaded and installed ${productName} from ${info.host} (checksum verified).`
+        : `Downloaded and installed ${productName} from ${info.host} (no checksum was provided in the manual — customer approved the URL).`,
+    };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}
+
 // The complete allowlist. Adding a tool here requires a spec version bump (§6).
 //   tier 0 = read-only diagnostic — runs silently.
 //   tier 1 = low-risk fix       — runs without a prompt, shown live in the feed.
@@ -737,6 +833,28 @@ const TOOLS = {
       const what = e ? `${e.product} ${e.version} — ${e.describe}` : `'${p && p.productId}' (not in the approved catalog)`;
       return `I'd like to download and install ${what} on this PC. ` +
              `I'll check the download is genuine (checksum) before running it, and it comes only from Alpha Web's approved list. Is that OK?`;
+    },
+  },
+  deploy_from_manual_url: {
+    tier: 2,
+    run: (p) => deployFromManualUrl(p),
+    consent: (p) => {
+      const name = String((p && p.productName) || 'this software').trim().slice(0, 120);
+      let host = '(unknown host)';
+      let href = String((p && p.url) || '').trim();
+      try {
+        const u = new URL(href);
+        host = u.host;
+        href = u.href;
+      } catch { /* show raw url below */ }
+      const hasHash = !!(p && p.sha256 && /^[a-f0-9]{64}$/i.test(String(p.sha256).trim()));
+      const hashNote = hasHash
+        ? 'I will verify the file checksum from your manual before running it.'
+        : 'Your manual did not include a checksum — I will only install if you approve this exact download link.';
+      return `I'd like to download and install ${name} from the setup guide you shared.\n` +
+             `Download host: ${host}\n` +
+             `Full URL: ${href}\n` +
+             `${hashNote} Only a silent .exe/.msi install will run — no other commands. Is that OK?`;
     },
   },
   clean_temp_files: {
