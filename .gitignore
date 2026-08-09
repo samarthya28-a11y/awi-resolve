@@ -1,7 +1,5 @@
-node_modules/
-agent/data/
-orchestrator/data/
-dist/
+﻿node_modules/
 .env
-licensing-key.pem
 tools/licensing-key.pem
+packaging/full-license-key.txt
+orchestrator/data/
