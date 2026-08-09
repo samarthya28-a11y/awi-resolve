@@ -232,11 +232,77 @@ function followUpContent(text, images) {
   );
 }
 
+// ---- Prompt caching ---------------------------------------------------------
+// The system prompt plus the 30 tool schemas come to ~5.7k tokens that are
+// byte-identical on every request, every ticket and every customer. A ticket
+// makes a dozen or so calls, so without a cache breakpoint we re-buy that same
+// block a dozen times over. Marking it cacheable turns it into one write plus
+// cheap reads — the single biggest lever on what a support session costs us.
+//
+// Requires the prefix to stay byte-stable: the system prompt is a static string
+// and the tool list is a fixed array, so nothing here varies per request. Don't
+// interpolate a date, hostname or device id into either — it would silently
+// disable this and nothing would fail loudly.
+const SYSTEM_CACHED = [
+  { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+];
+
+// Second breakpoint, rolling: caches the conversation so far, so step 9 of a
+// ticket re-reads steps 1-8 instead of reprocessing them. MOVED rather than
+// added each turn — the API allows at most 4 breakpoints per request, and a
+// ticket can run 16 steps.
+function moveConversationCachePoint(messages) {
+  for (const m of messages) {
+    if (Array.isArray(m.content)) {
+      for (const b of m.content) if (b && b.cache_control) delete b.cache_control;
+    }
+  }
+  const last = messages[messages.length - 1];
+  if (!last) return;
+  if (typeof last.content === 'string') {
+    last.content = [{ type: 'text', text: last.content, cache_control: { type: 'ephemeral' } }];
+  } else if (Array.isArray(last.content) && last.content.length) {
+    last.content[last.content.length - 1].cache_control = { type: 'ephemeral' };
+  }
+}
+
+// Per-ticket token accounting. The caching above is worth real money, but an
+// unmeasured saving is one nobody can defend in a price review — so every
+// ticket reports what it actually cost. Rates are Claude Opus 4.8: $5/M input,
+// $25/M output, cache writes 1.25x input, cache reads 0.1x.
+const RATE_USD_PER_MTOK = { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 };
+let usageTotals = null;
+
+function resetUsage() { usageTotals = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }; }
+
+function recordCacheUsage(u) {
+  if (!u || !usageTotals) return;
+  usageTotals.input     += u.input_tokens || 0;
+  usageTotals.output    += u.output_tokens || 0;
+  usageTotals.cacheWrite += u.cache_creation_input_tokens || 0;
+  usageTotals.cacheRead  += u.cache_read_input_tokens || 0;
+}
+
+function usageSummary() {
+  if (!usageTotals) return null;
+  const t = usageTotals;
+  const usd = (t.input * RATE_USD_PER_MTOK.input + t.output * RATE_USD_PER_MTOK.output
+             + t.cacheWrite * RATE_USD_PER_MTOK.cacheWrite + t.cacheRead * RATE_USD_PER_MTOK.cacheRead) / 1e6;
+  // What the same ticket would have cost with no caching: everything we read
+  // from cache would instead have been full-price input.
+  const withoutCache = ((t.input + t.cacheWrite + t.cacheRead) * RATE_USD_PER_MTOK.input
+                      + t.output * RATE_USD_PER_MTOK.output) / 1e6;
+  const round = (n) => Math.round(n * 10000) / 10000;
+  return { ...t, estimatedUsd: round(usd), withoutCachingUsd: round(withoutCache),
+           savedUsd: round(withoutCache - usd) };
+}
+
 async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
                           customerManuals = [], takePendingManuals = () => [],
                           priorMessages = null, images = [],
                           onStep = () => {}, onUpdate = () => {} }) {
   const client = new Anthropic({ apiKey });
+  resetUsage();
 
   const deployNote = manuals.length
     ? `Software you have deployment manuals for (use read_deployment_manual to guide an install): ${manuals.map((m) => m.product).join(', ')}.\n\n`
@@ -272,9 +338,11 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
       }
     }
 
+    moveConversationCachePoint(messages);
     const response = await client.messages.create({
-      model: MODEL, max_tokens: 4096, system: SYSTEM_PROMPT, tools: TOOLS, messages,
+      model: MODEL, max_tokens: 4096, system: SYSTEM_CACHED, tools: TOOLS, messages,
     });
+    recordCacheUsage(response.usage);
     messages.push({ role: 'assistant', content: response.content });
 
     // Relay the model's running narration to the customer window.
@@ -285,6 +353,7 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
       const escalate = /^ESCALATE:\s*yes/im.test(narration);
       const report = narration.replace(/^ESCALATE:.*$/im, '').trim();
       return { report, escalate, toolCalls, steps: step + 1, stopReason: response.stop_reason,
+               usage: usageSummary(),
                messages };   // returned so a follow-up can continue this conversation
     }
     if (narration) onUpdate(narration);

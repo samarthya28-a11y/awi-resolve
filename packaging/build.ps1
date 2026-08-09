@@ -13,8 +13,11 @@ New-Item -ItemType Directory -Force -Path $Out, "$Out\agent", "$Out\node_modules
 # Bundled Node runtime
 Copy-Item (Get-Command node).Source (Join-Path $Out 'node.exe')
 
-# Agent code (exclude runtime state in agent\data)
-Copy-Item "$Root\agent\agent.js","$Root\agent\tools.js" "$Out\agent"
+# Agent code (exclude runtime state in agent\data). Copy EVERY module rather
+# than a hand-written list: a list silently goes stale the moment a new file is
+# added, and the package then dies on startup with "Cannot find module" — which
+# is exactly what shipping without agent\catalog.js did.
+Get-ChildItem "$Root\agent\*.js" | Copy-Item -Destination "$Out\agent"
 Copy-Item "$Root\agent\ui" "$Out\agent\ui" -Recurse
 
 # Support service (orchestrator). Shipped so a self-hosted install can run the
@@ -39,6 +42,23 @@ Copy-Item "$Pkg\config.template.json" (Join-Path $Out 'config.json')
 Copy-Item "$Pkg\run-agent-hidden.vbs","$Pkg\run-orchestrator-hidden.vbs",`
           "$Pkg\Install.ps1","$Pkg\Uninstall.ps1","$Pkg\README.txt" $Out
 Copy-Item "$Pkg\Install AWI Resolve.cmd" $Out
+
+# Smoke test: actually load the packaged agent and orchestrator with the bundled
+# node. A missing module or bad path fails HERE, at build time, instead of on a
+# customer's PC as a support window that silently refuses to connect.
+Write-Host 'Verifying the package loads...' -ForegroundColor Cyan
+foreach ($entry in @('agent\agent.js', 'orchestrator\server.js')) {
+  # Absolute path with forward slashes — a bare "agent/agent.js" would be
+  # resolved as a package name, not a file, and always fail.
+  $full = (Join-Path $Out $entry).Replace('\','/')
+  $probe = & "$Out\node.exe" -e "try{require('$full');process.exit(0)}catch(e){if(/Cannot find module/.test(e.message)){console.error(e.message);process.exit(1)}process.exit(0)}" 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "  BUILD FAILED: $entry is missing a module in the package" -ForegroundColor Red
+    Write-Host "  $probe" -ForegroundColor Red
+    exit 1
+  }
+  Write-Host "  ok  $entry" -ForegroundColor Green
+}
 
 $size = [math]::Round(((Get-ChildItem $Out -Recurse | Measure-Object Length -Sum).Sum)/1MB,0)
 Write-Host "Done. Package is $size MB at $Out" -ForegroundColor Green

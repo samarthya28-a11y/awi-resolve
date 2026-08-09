@@ -294,6 +294,14 @@ async function runTicket(ws, deviceId, ticket) {
     }
     ws.send(JSON.stringify({ type: 'ticket_done' }));
     log(`ticket closed in ${durationSec}s over ${result.steps} step(s), ${result.toolCalls.length} tool call(s)`);
+    // Cost per ticket is the number the pricing model rests on — log it every
+    // time rather than leaving it to be re-measured by hand later.
+    if (result.usage) {
+      const u = result.usage;
+      log(`cost: $${u.estimatedUsd.toFixed(4)} (would have been $${u.withoutCachingUsd.toFixed(4)} uncached — `
+        + `saved $${u.savedUsd.toFixed(4)}); tokens in=${u.input} out=${u.output} `
+        + `cacheWrite=${u.cacheWrite} cacheRead=${u.cacheRead}`);
+    }
     log(`\n===== AI TECHNICIAN REPORT =====\n${result.report}\n================================`);
   } catch (e) {
     log(`ticket error: ${e.message}`);
