@@ -36,6 +36,7 @@ Start-Sleep -Seconds 2
 
 Copy-Item "$Root\agent\*.js" "$InstallTo\agent\" -Force
 Copy-Item "$Root\orchestrator\*.js" "$InstallTo\orchestrator\" -Force
+Copy-Item "$Root\orchestrator\ui" "$InstallTo\orchestrator\ui" -Recurse -Force
 if (Test-Path "$Root\orchestrator\licensing-key.pub") {
   Copy-Item "$Root\orchestrator\licensing-key.pub" "$InstallTo\orchestrator\" -Force
 }

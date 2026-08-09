@@ -648,12 +648,12 @@ async function deploySoftware(params) {
   }
 }
 
-// ---- Level 2b: install from a customer-shared manual URL (v1.2) ----
-// The AI may pass a URL taken from an attached setup guide. Agent still
-// enforces: HTTPS only, .exe/.msi only, fixed silent args (never model-
-// supplied), optional sha256 verify, size cap, temp cleanup. No free-form shell.
+// ---- Org / pinned deploy (spec §6 v1.3) ----
+// The AI never supplies these fields. The orchestrator resolves an
+// IT-admin-approved org library entry (or similar) and sends a pinned
+// payload: productName + https url + required sha256 + installer type.
 
-const FORBIDDEN_INSTALL_EXT = /\.(ps1|bat|cmd|vbs|js|jse|wsf|wsh|msi\.bat|zip|7z|rar|tar|gz|iso|img|scr|com|pif)(\?|$)/i;
+const FORBIDDEN_INSTALL_EXT = /\.(ps1|bat|cmd|vbs|js|jse|wsf|wsh|zip|7z|rar|tar|gz|iso|img|scr|com|pif)(\?|$)/i;
 
 function classifyManualInstaller(url) {
   let parsed;
@@ -670,42 +670,37 @@ function classifyManualInstaller(url) {
   throw new Error('installer URL must end in .exe or .msi');
 }
 
-async function deployFromManualUrl(params) {
+async function deployPinnedSoftware(params) {
   const productName = String((params && params.productName) || '').trim().slice(0, 120);
   if (!productName) throw new Error('productName is required');
   const url = String((params && params.url) || '').trim();
   if (!url) throw new Error('url is required');
   const info = classifyManualInstaller(url);
 
-  let expectHash = null;
   const rawHash = params && params.sha256 != null ? String(params.sha256).trim() : '';
-  if (rawHash) {
-    if (!/^[a-f0-9]{64}$/i.test(rawHash)) {
-      throw new Error('sha256 must be a 64-character hex digest when provided');
-    }
-    expectHash = rawHash.toLowerCase();
+  if (!/^[a-f0-9]{64}$/i.test(rawHash)) {
+    throw new Error('sha256 is required — refusing to install without a pinned checksum');
   }
+  const expectHash = rawHash.toLowerCase();
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awi-resolve-manual-'));
-  const file = path.join(dir, info.kind === 'msi' ? 'installer.msi' : 'installer.exe');
+  const kind = (params && params.installerType) === 'msi' ? 'msi' : info.kind;
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'awi-resolve-pinned-'));
+  const file = path.join(dir, kind === 'msi' ? 'installer.msi' : 'installer.exe');
   const cleanup = () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} };
 
   try {
     const bytes = await download(info.href, file);
     const digest = await sha256File(file);
-    let checksumVerified = false;
-    if (expectHash) {
-      if (digest !== expectHash) {
-        cleanup();
-        throw new Error(
-          `SECURITY: installer checksum mismatch for ${productName} — expected ${expectHash}, got ${digest}. Installation aborted.`
-        );
-      }
-      checksumVerified = true;
+    if (digest !== expectHash) {
+      cleanup();
+      throw new Error(
+        `SECURITY: installer checksum mismatch for ${productName} — expected ${expectHash}, got ${digest}. Installation aborted.`
+      );
     }
 
-    const exe = info.kind === 'msi' ? 'msiexec.exe' : file;
-    const argv = info.kind === 'msi' ? ['/i', file, '/qn'] : ['/S'];
+    const exe = kind === 'msi' ? 'msiexec.exe' : file;
+    const argv = kind === 'msi' ? ['/i', file, '/qn'] : ['/S'];
 
     await new Promise((resolve, reject) => {
       execFile(exe, argv, { timeout: INSTALL_TIMEOUT_MS, windowsHide: true }, (err) => {
@@ -721,11 +716,8 @@ async function deployFromManualUrl(params) {
       url: info.href,
       host: info.host,
       downloadedBytes: bytes,
-      checksumVerified,
-      checksumProvided: !!expectHash,
-      action: checksumVerified
-        ? `Downloaded and installed ${productName} from ${info.host} (checksum verified).`
-        : `Downloaded and installed ${productName} from ${info.host} (no checksum was provided in the manual — customer approved the URL).`,
+      checksumVerified: true,
+      action: `Downloaded and installed ${productName} from ${info.host} (IT-admin approved, checksum verified).`,
     };
   } catch (e) {
     cleanup();
@@ -835,9 +827,11 @@ const TOOLS = {
              `I'll check the download is genuine (checksum) before running it, and it comes only from Alpha Web's approved list. Is that OK?`;
     },
   },
-  deploy_from_manual_url: {
+  // Called only after the orchestrator resolves an IT-admin org-library entry.
+  // The AI never names this tool — it calls deploy_org_software (cloud-side).
+  deploy_pinned_software: {
     tier: 2,
-    run: (p) => deployFromManualUrl(p),
+    run: (p) => deployPinnedSoftware(p),
     consent: (p) => {
       const name = String((p && p.productName) || 'this software').trim().slice(0, 120);
       let host = '(unknown host)';
@@ -846,15 +840,11 @@ const TOOLS = {
         const u = new URL(href);
         host = u.host;
         href = u.href;
-      } catch { /* show raw url below */ }
-      const hasHash = !!(p && p.sha256 && /^[a-f0-9]{64}$/i.test(String(p.sha256).trim()));
-      const hashNote = hasHash
-        ? 'I will verify the file checksum from your manual before running it.'
-        : 'Your manual did not include a checksum — I will only install if you approve this exact download link.';
-      return `I'd like to download and install ${name} from the setup guide you shared.\n` +
+      } catch { /* show raw */ }
+      return `I'd like to download and install ${name}. Your IT admin approved this package for your organisation.\n` +
              `Download host: ${host}\n` +
              `Full URL: ${href}\n` +
-             `${hashNote} Only a silent .exe/.msi install will run — no other commands. Is that OK?`;
+             `I will verify the file checksum before running a silent install. Is that OK?`;
     },
   },
   clean_temp_files: {

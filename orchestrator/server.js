@@ -8,12 +8,15 @@ const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
-const { diagnose, MODEL } = require('./ai');
+const { diagnose, MODEL, resolveOrchestratorTool } = require('./ai');
 const { loadManuals } = require('./manuals');
 const { evaluate: evaluateLicense } = require('./licensing');
+const orgLibrary = require('./org-library');
 
 // deviceId -> licence evaluation, consulted before any tool that changes the PC.
 const deviceLicenses = new Map();
+// deviceId -> customer org id (slug) for the IT-admin software library.
+const deviceCustomers = new Map();
 const { kbStats } = require('./kb');
 const { recordPosture, fleetView } = require('./fleet');
 const { buildReport, saveReport, listReports, getReport } = require('./report');
@@ -21,6 +24,9 @@ const { buildReport, saveReport, listReports, getReport } = require('./report');
 // The fleet dashboard exposes customer security posture, so it is never open.
 // Set RESOLVE_DASHBOARD_TOKEN to enable it; unset = dashboard disabled entirely.
 const DASHBOARD_TOKEN = process.env.RESOLVE_DASHBOARD_TOKEN || '';
+// Optional bootstrap: RESOLVE_DEFAULT_CUSTOMER_ID used in local/dev when a
+// licence has no customerId/customer name (so the admin library still works).
+const DEFAULT_CUSTOMER_ID = process.env.RESOLVE_DEFAULT_CUSTOMER_ID || '';
 
 const MANUALS = loadManuals();
 const KB = kbStats();
@@ -69,6 +75,78 @@ function audit(event) {
 
 const pendingCalls = new Map(); // callId -> resolve()
 
+async function resolveCloudTool(ws, deviceId, customerId, name, input) {
+  if (name === 'list_org_approved_software') {
+    if (!customerId) {
+      return {
+        status: 'ok',
+        result: {
+          products: [],
+          message: 'This PC is not linked to a customer organisation yet. Ask IT admin to issue a licence with a customer name/id, or set RESOLVE_DEFAULT_CUSTOMER_ID on the service for local testing.',
+        },
+      };
+    }
+    const products = orgLibrary.listEnabled(customerId);
+    return {
+      status: 'ok',
+      result: {
+        customerId,
+        products,
+        message: products.length
+          ? null
+          : 'Your IT admin has not approved any packages in the organisation software library yet.',
+      },
+    };
+  }
+  if (name === 'read_org_software_manual') {
+    if (!customerId) {
+      return { status: 'error', reason: 'No customer organisation linked to this device.' };
+    }
+    const entry = orgLibrary.getPackage(customerId, input && input.productId);
+    if (!entry || entry.enabled === false) {
+      return {
+        status: 'ok',
+        result: {
+          found: false,
+          message: `No enabled org package "${input && input.productId}". Call list_org_approved_software.`,
+          available: orgLibrary.listEnabled(customerId).map((p) => p.productId),
+        },
+      };
+    }
+    return {
+      status: 'ok',
+      result: {
+        found: true,
+        productId: entry.productId,
+        product: entry.productName,
+        version: entry.version || null,
+        manual: entry.manualText,
+      },
+    };
+  }
+  if (name === 'deploy_org_software') {
+    if (!customerId) {
+      return { status: 'error', reason: 'No customer organisation linked — cannot deploy org software.' };
+    }
+    const entry = orgLibrary.getPackage(customerId, input && input.productId);
+    if (!entry || entry.enabled === false) {
+      return {
+        status: 'error',
+        reason: `"${input && input.productId}" is not in this organisation's approved software library (or is disabled). Their IT admin must add it first.`,
+      };
+    }
+    // AI never sees/supplies the URL — we pin it here from the admin library.
+    return callTool(ws, deviceId, 'deploy_pinned_software', {
+      productName: entry.productName,
+      url: entry.downloadUrl,
+      sha256: entry.sha256,
+      installerType: entry.installerType,
+      productId: entry.productId,
+    });
+  }
+  return resolveOrchestratorTool(name, input, MANUALS);
+}
+
 // How long the cloud waits for the agent to answer a tool call.
 // MUST exceed the agent's consent window (60s) — otherwise we could give up on a
 // Tier-2 action while the customer is still deciding, and the action could then
@@ -88,7 +166,7 @@ const KNOWN_CHANGE_TOOLS = new Set([
   'clear_dns_cache', 'restart_service', 'clear_print_queue', 'enable_service',
   'restart_explorer', 'renew_network', 'update_defender_signatures',
   'run_security_scan', 'enable_protection', 'deploy_software',
-  'deploy_from_manual_url', 'clean_temp_files',
+  'deploy_pinned_software', 'clean_temp_files',
 ]);
 
 function licenseAllows(deviceId, toolId) {
@@ -101,7 +179,7 @@ function licenseAllows(deviceId, toolId) {
       ? `This machine's licence expired on ${String(lic.expiresAt).slice(0, 10)}.`
       : 'This machine does not have an active Resolve licence.' };
   }
-  if ((toolId === 'deploy_software' || toolId === 'deploy_from_manual_url') && !caps.deployment) {
+  if ((toolId === 'deploy_software' || toolId === 'deploy_pinned_software') && !caps.deployment) {
     return { allowed: false, why: `Software deployment is not included in the ${caps.label} plan.` };
   }
   return { allowed: true };
@@ -124,7 +202,7 @@ function callTool(ws, deviceId, toolId, params) {
     pendingCalls.set(callId, resolve);
     audit({ event: 'tool_call_sent', deviceId, toolId, params });
     ws.send(JSON.stringify({ type: 'tool_call', callId, toolId, params }));
-    const ms = (toolId === 'deploy_software' || toolId === 'deploy_from_manual_url')
+    const ms = (toolId === 'deploy_software' || toolId === 'deploy_pinned_software')
       ? DEPLOY_TIMEOUT_MS : TOOL_TIMEOUT_MS;
     setTimeout(() => {
       if (pendingCalls.delete(callId)) resolve({ status: 'timeout', toolId });
@@ -233,6 +311,7 @@ async function runTicket(ws, deviceId, ticket) {
 
     log(`AI technician (${MODEL}) working ticket: "${ticket}"`);
     const started = Date.now();
+    const customerId = deviceCustomers.get(deviceId) || null;
     const result = await diagnose({
       apiKey: API_KEY,
       ticket,
@@ -254,6 +333,7 @@ async function runTicket(ws, deviceId, ticket) {
       },
       priorMessages: isFollowUp ? prior.messages : null,
       images,
+      resolveCloudTool: (name, input) => resolveCloudTool(ws, deviceId, customerId, name, input),
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
     });
@@ -334,6 +414,7 @@ async function runTicket(ws, deviceId, ticket) {
 // HTTP server for the host's health check + the WebSocket upgrade endpoint.
 const DASHBOARD_FILE = path.join(__dirname, 'ui', 'fleet.html');
 const REPORTS_FILE = path.join(__dirname, 'ui', 'reports.html');
+const ADMIN_SOFTWARE_FILE = path.join(__dirname, 'ui', 'org-software.html');
 
 // Constant-time-ish token compare
 function tokenOk(supplied) {
@@ -343,13 +424,123 @@ function tokenOk(supplied) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-const httpServer = http.createServer((req, res) => {
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 2_000_000) {
+        reject(new Error('body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try {
+        const raw = Buffer.concat(chunks).toString('utf8') || '{}';
+        resolve(JSON.parse(raw));
+      } catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
+}
+
+const httpServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const route = url.pathname;
 
   if (route === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     return res.end('AWI Resolve orchestrator OK');
+  }
+
+  // ---- Customer IT-admin software library (token per customer org) ----
+  if (route === '/admin/software' || route.startsWith('/api/admin/software')) {
+    const customerId = orgLibrary.slugify(url.searchParams.get('customerId') || '');
+    const token = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!customerId) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      return res.end('customerId query parameter is required.');
+    }
+    if (!orgLibrary.adminTokenOk(customerId, token)) {
+      log(`org-software admin DENIED for ${customerId} from ${req.socket.remoteAddress}`);
+      res.writeHead(401, { 'Content-Type': 'text/plain' });
+      return res.end('Unauthorised. Ask Alpha Web / your Resolve operator for this org\'s admin token.');
+    }
+    const json = (obj, code = 200) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      if (route === '/admin/software' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return fs.createReadStream(ADMIN_SOFTWARE_FILE).pipe(res);
+      }
+      if (route === '/api/admin/software' && req.method === 'GET') {
+        return json({ customerId, packages: orgLibrary.listAllPublic(customerId) });
+      }
+      if (route === '/api/admin/software' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = orgLibrary.upsertPackage(customerId, { ...body, createdBy: 'it-admin' });
+        if (!result.ok) return json({ error: result.errors.join('; ') }, 400);
+        audit({ event: 'org_software_upsert', customerId, productId: result.package.productId });
+        return json({ ok: true, package: result.package });
+      }
+      if (route === '/api/admin/software/enable' && req.method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = orgLibrary.setEnabled(customerId, body.productId, body.enabled !== false);
+        if (!result.ok) return json({ error: result.error }, 404);
+        return json({ ok: true, package: result.package });
+      }
+      if (route === '/api/admin/software' && req.method === 'DELETE') {
+        const productId = url.searchParams.get('productId') || (await readJsonBody(req)).productId;
+        const result = orgLibrary.removePackage(customerId, productId);
+        if (!result.ok) return json({ error: result.error }, 404);
+        audit({ event: 'org_software_removed', customerId, productId });
+        return json({ ok: true });
+      }
+      res.writeHead(405).end('Method not allowed');
+      return;
+    } catch (e) {
+      return json({ error: e.message }, 400);
+    }
+  }
+
+  // Bootstrap helper (dashboard token): create/show an org admin token.
+  if (route === '/api/admin/bootstrap-token' && req.method === 'POST') {
+    if (!DASHBOARD_TOKEN) {
+      res.writeHead(404).end('Dashboard disabled');
+      return;
+    }
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!tokenOk(supplied)) {
+      res.writeHead(401).end('Unauthorised');
+      return;
+    }
+    try {
+      const body = await readJsonBody(req);
+      const customerId = orgLibrary.slugify(body.customerId || body.customer || '');
+      if (!customerId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'customerId required' }));
+      }
+      const issued = orgLibrary.ensureAdminToken(customerId);
+      audit({ event: 'org_admin_token_issued', customerId, created: issued.created });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({
+        customerId: issued.customerId,
+        token: issued.token,
+        adminUrl: `/admin/software?customerId=${encodeURIComponent(issued.customerId)}&token=${encodeURIComponent(issued.token)}`,
+        created: issued.created,
+      }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
   }
 
   // ---- Fleet security dashboard + session reports (token-gated) ----
@@ -445,17 +636,30 @@ wss.on('connection', (ws) => {
       // wrong — but consent-gated fixes and deployment are withheld.
       const lic = evaluateLicense(msg.licenseKey, deviceId);
       deviceLicenses.set(deviceId, lic);
-      audit({ event: 'license_checked', deviceId, plan: lic.plan, valid: lic.valid, reason: lic.reason });
+      const customerId = orgLibrary.customerIdFromLicense(lic)
+        || (msg.customerId ? orgLibrary.slugify(msg.customerId) : null)
+        || (loadDevices()[deviceId] && loadDevices()[deviceId].customerId) || null
+        || (DEFAULT_CUSTOMER_ID ? orgLibrary.slugify(DEFAULT_CUSTOMER_ID) : null);
+      if (customerId) {
+        deviceCustomers.set(deviceId, customerId);
+        const devices2 = loadDevices();
+        if (devices2[deviceId]) {
+          devices2[deviceId].customerId = customerId;
+          saveDevices(devices2);
+        }
+      }
+      audit({ event: 'license_checked', deviceId, plan: lic.plan, valid: lic.valid, reason: lic.reason, customerId });
       if (lic.valid) {
         const left = lic.daysLeft != null ? `, ${lic.daysLeft} day(s) left` : '';
-        log(`licence OK — ${lic.customer} / ${lic.plan}${left}`);
+        log(`licence OK — ${lic.customer} / ${lic.plan}${left}${customerId ? ` [org ${customerId}]` : ''}`);
       } else {
         log(`UNLICENSED (${lic.reason}) — diagnostics only, fixes withheld`);
       }
       ws.send(JSON.stringify({
         type: 'license_status',
         valid: lic.valid, plan: lic.plan, label: lic.caps.label,
-        customer: lic.customer || null, daysLeft: lic.daysLeft ?? null,
+        customer: lic.customer || null, customerId: customerId || null,
+        daysLeft: lic.daysLeft ?? null,
         expiresAt: lic.expiresAt || null, reason: lic.reason,
       }));
 

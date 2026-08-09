@@ -61,12 +61,14 @@ function issue() {
   const payload = {
     licenseId: crypto.randomUUID(),
     customer,
+    customerId: arg('customer-id') || undefined,
     plan,
     seats,
     issuedAt: now.toISOString(),
     expiresAt: expires.toISOString(),
     ...(devices.length ? { deviceIds: devices } : {}),
   };
+  if (!payload.customerId) delete payload.customerId;
 
   // Sign the exact bytes the verifier will reconstruct — JSON.stringify of the
   // payload object. Key order is preserved by both sides, so this is stable.
@@ -80,6 +82,7 @@ function issue() {
 
   console.log('');
   console.log(`Customer : ${customer}`);
+  if (payload.customerId) console.log(`Org id   : ${payload.customerId}`);
   console.log(`Plan     : ${plan}   Seats: ${seats}`);
   console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
   if (devices.length) console.log(`Devices  : ${devices.join(', ')}`);

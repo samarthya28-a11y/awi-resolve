@@ -33,7 +33,8 @@ const ORCH_URL = process.env.RESOLVE_ORCH_URL || CONFIG.orchestratorUrl || 'ws:/
 const UI_PORT = Number(process.env.RESOLVE_UI_PORT || CONFIG.uiPort || 8790);
 const ENROLLMENT_SECRET = process.env.RESOLVE_ENROLLMENT_SECRET || CONFIG.enrollmentSecret || '';
 const LICENSE_KEY = process.env.RESOLVE_LICENSE_KEY || CONFIG.licenseKey || '';
-const AGENT_VERSION = '0.2.0';
+const CUSTOMER_ID = process.env.RESOLVE_CUSTOMER_ID || CONFIG.customerId || '';
+const AGENT_VERSION = '0.3.0';
 const CONSENT_TIMEOUT_MS = 60000; // spec §7: timeout is treated as declined
 const DATA_DIR = path.join(__dirname, 'data');
 const IDENTITY_FILE = path.join(DATA_DIR, 'device.json');
@@ -257,7 +258,7 @@ function connect(identity) {
     // nothing.
     ws.send(JSON.stringify({ type: 'hello', deviceId: identity.deviceId, deviceSecret: identity.deviceSecret,
       hostname: os.hostname(), agentVersion: AGENT_VERSION, enrollmentSecret: ENROLLMENT_SECRET,
-      licenseKey: LICENSE_KEY }));
+      licenseKey: LICENSE_KEY, customerId: CUSTOMER_ID || undefined }));
   });
 
   ws.on('message', (raw) => {

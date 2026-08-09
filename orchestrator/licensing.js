@@ -113,6 +113,7 @@ function evaluate(key, deviceId, now = new Date()) {
     plan: p.plan,
     caps,
     customer: p.customer,
+    customerId: p.customerId || null,
     seats: p.seats || 1,
     licenseId: p.licenseId,
     expiresAt: p.expiresAt || null,

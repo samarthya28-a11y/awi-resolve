@@ -42,5 +42,8 @@ if errorlevel 1 ( echo FAILED - tell Claude Code. & pause & exit /b 1 )
 echo Give the customer the key above. They paste it into "licenseKey"
 echo in config.json next to the installed app, then restart Resolve.
 echo.
+echo Tip: add --customer-id your-org-slug when issuing so PCs map to that
+echo organisation's Approved Software Library for IT-admin installs.
+echo.
 pause
 endlocal

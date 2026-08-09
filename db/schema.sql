@@ -83,3 +83,33 @@ create table escalations (
   resolved_by text,
   resolution_notes text                -- feeds playbook improvements after human review
 );
+
+-- Per-customer IT-admin approved software library (spec §6 v1.3).
+-- Manuals + HTTPS download links + sha256 only — installer binaries are NOT stored.
+create table customer_admins (
+  id           uuid primary key default gen_random_uuid(),
+  customer_id  uuid references customers(id) not null,
+  email        text not null,
+  created_at   timestamptz default now(),
+  unique (customer_id, email)
+);
+
+create table org_software (
+  id            uuid primary key default gen_random_uuid(),
+  customer_id   uuid references customers(id) not null,
+  product_id    text not null,              -- slug, unique per customer
+  product_name  text not null,
+  version       text,
+  download_url  text not null,              -- https .exe / .msi only
+  sha256        text not null check (sha256 ~ '^[a-f0-9]{64}$'),
+  installer_type text not null check (installer_type in ('exe', 'msi')),
+  manual_text   text not null,              -- setup guide body
+  verify_hint   text,                       -- optional post-install check note
+  enabled       boolean not null default true,
+  created_by    text,
+  created_at    timestamptz default now(),
+  updated_at    timestamptz default now(),
+  unique (customer_id, product_id)
+);
+
+create index org_software_customer_idx on org_software (customer_id) where enabled;
