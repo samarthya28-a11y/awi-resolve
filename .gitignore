@@ -3,3 +3,5 @@ agent/data/
 orchestrator/data/
 dist/
 .env
+licensing-key.pem
+tools/licensing-key.pem

@@ -10,6 +10,10 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { diagnose, MODEL } = require('./ai');
 const { loadManuals } = require('./manuals');
+const { evaluate: evaluateLicense } = require('./licensing');
+
+// deviceId -> licence evaluation, consulted before any tool that changes the PC.
+const deviceLicenses = new Map();
 const { kbStats } = require('./kb');
 const { recordPosture, fleetView } = require('./fleet');
 const { buildReport, saveReport, listReports, getReport } = require('./report');
@@ -73,7 +77,39 @@ const pendingCalls = new Map(); // callId -> resolve()
 const TOOL_TIMEOUT_MS = 120000;         // read-only + quick fixes (> 60s consent)
 const DEPLOY_TIMEOUT_MS = 480000;       // consent + download + install + verify
 
+// Read-only naming convention, same as the session report uses. Anything that
+// isn't a get_/list_/read_/check_/test_/search_ tool changes the machine, so an
+// unknown or newly added tool is treated as a change and gated — the safe way
+// round for a licence check to fail.
+const READ_ONLY_TOOL = /^(get_|list_|read_|check_|test_|search_)/;
+
+function licenseAllows(deviceId, toolId) {
+  if (READ_ONLY_TOOL.test(toolId)) return { allowed: true };
+  const lic = deviceLicenses.get(deviceId);
+  const caps = lic ? lic.caps : null;
+  if (!caps || !caps.fixes) {
+    return { allowed: false, why: lic && lic.expired
+      ? `This machine's licence expired on ${String(lic.expiresAt).slice(0, 10)}.`
+      : 'This machine does not have an active Resolve licence.' };
+  }
+  if (toolId === 'deploy_software' && !caps.deployment) {
+    return { allowed: false, why: `Software deployment is not included in the ${caps.label} plan.` };
+  }
+  return { allowed: true };
+}
+
 function callTool(ws, deviceId, toolId, params) {
+  const gate = licenseAllows(deviceId, toolId);
+  if (!gate.allowed) {
+    audit({ event: 'tool_call_unlicensed', deviceId, toolId });
+    log(`licence gate blocked '${toolId}' for ${deviceId}: ${gate.why}`);
+    // Returned as a normal tool result so the AI explains it to the customer
+    // and escalates, rather than the session simply failing.
+    return Promise.resolve({
+      status: 'not_licensed', toolId,
+      error: `${gate.why} Diagnostics still work, but applying this fix needs an active licence — offer to escalate to a human technician, and mention that Alpha Web can activate a licence.`,
+    });
+  }
   return new Promise((resolve) => {
     const callId = crypto.randomUUID();
     pendingCalls.set(callId, resolve);
@@ -376,6 +412,26 @@ wss.on('connection', (ws) => {
         ws.close();
         return;
       }
+      // Licence check. Done here rather than in the agent because the agent runs
+      // on the customer's own PC. An unlicensed device is not cut off — it keeps
+      // read-only diagnostics, so nobody is left unable to find out what is
+      // wrong — but consent-gated fixes and deployment are withheld.
+      const lic = evaluateLicense(msg.licenseKey, deviceId);
+      deviceLicenses.set(deviceId, lic);
+      audit({ event: 'license_checked', deviceId, plan: lic.plan, valid: lic.valid, reason: lic.reason });
+      if (lic.valid) {
+        const left = lic.daysLeft != null ? `, ${lic.daysLeft} day(s) left` : '';
+        log(`licence OK — ${lic.customer} / ${lic.plan}${left}`);
+      } else {
+        log(`UNLICENSED (${lic.reason}) — diagnostics only, fixes withheld`);
+      }
+      ws.send(JSON.stringify({
+        type: 'license_status',
+        valid: lic.valid, plan: lic.plan, label: lic.caps.label,
+        customer: lic.customer || null, daysLeft: lic.daysLeft ?? null,
+        expiresAt: lic.expiresAt || null, reason: lic.reason,
+      }));
+
       if (API_KEY) {
         // Standing safety check on connect, then wait for the customer to open a
         // ticket from their support window (msg.type 'open_ticket', below).
