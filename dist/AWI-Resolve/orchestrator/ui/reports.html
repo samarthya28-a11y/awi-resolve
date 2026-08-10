@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AWI Resolve — Session Reports</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{--blue:#00aeef;--magenta:#ad208e;--green:#9ccb3b;--orange:#f47521;
+        --navy:#15213b;--navy-l:#1f3158;--ink:#1c2333;--muted:#5b667d;--line:#e6e9f0;--surface:#f6f8fc;
+        --crit:#d1554f;--warn:#e0a341;
+        --grad:linear-gradient(100deg,var(--blue),var(--magenta) 55%,var(--orange));}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Plus Jakarta Sans",Segoe UI,system-ui,sans-serif;background:var(--surface);color:var(--ink);line-height:1.55}
+  header{display:flex;align-items:center;gap:14px;padding:16px 26px;background:#fff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  .mark{width:30px;height:30px;flex:none}
+  .brand{display:flex;flex-direction:column;line-height:1}
+  .brand strong{font-size:17px;font-weight:800;color:var(--navy)}
+  .brand small{font-size:9px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--orange);margin-top:3px}
+  .title{margin-left:12px;padding-left:14px;border-left:1px solid var(--line);font-weight:700;font-size:14px}
+  .title .g{background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  nav{margin-left:auto;display:flex;gap:8px}
+  nav a{font-size:12.5px;font-weight:700;color:var(--muted);text-decoration:none;padding:7px 13px;border-radius:9px;border:1px solid var(--line)}
+  nav a.on,nav a:hover{color:var(--navy);border-color:var(--blue)}
+  main{padding:24px 26px;max-width:1080px;margin:0 auto}
+  .row{background:#fff;border:1px solid var(--line);border-radius:14px;margin-bottom:12px;box-shadow:0 10px 30px rgba(21,33,59,.05);overflow:hidden}
+  .rh{display:flex;gap:12px;align-items:flex-start;padding:15px 18px;cursor:pointer}
+  .req{font-weight:700;font-size:14.5px}
+  .sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .tags{margin-left:auto;display:flex;gap:7px;flex:none;flex-wrap:wrap;justify-content:flex-end}
+  .tag{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;padding:4px 9px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--muted)}
+  .tag.chg{background:#eef7e4;border-color:#cfe6ae;color:#4a6b1e}
+  .tag.non{background:#fdf3e3;border-color:#f0d9a8;color:#8a5d12}
+  .tag.esc{background:#fdecea;border-color:#f5c6c2;color:var(--crit)}
+  .body{display:none;border-top:1px solid var(--line);padding:4px 18px 18px}
+  .row.open .body{display:block}
+  h4{margin:16px 0 6px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--magenta);font-weight:800}
+  p.s{margin:0;font-size:13.5px;white-space:pre-wrap}
+  .item{display:flex;gap:10px;padding:9px 0;border-bottom:1px dashed var(--line);font-size:13px}
+  .item:last-child{border-bottom:0}
+  .ic{width:8px;height:8px;border-radius:50%;margin-top:7px;flex:none}
+  .ic.ok{background:var(--green)} .ic.chg{background:var(--blue)} .ic.no{background:var(--warn)} .ic.blk{background:var(--crit)}
+  .w{font-weight:600} .d{color:var(--muted);font-size:12.5px}
+  .why{color:var(--navy-l);font-size:12.5px;margin-top:2px}
+  .cat{display:inline-block;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-right:6px}
+  .empty{background:#fff;border:1px dashed var(--line);border-radius:14px;padding:40px;text-align:center;color:var(--muted)}
+  .dl{font-size:12px;font-weight:700;color:var(--blue);text-decoration:none;margin-top:12px;display:inline-block}
+</style>
+</head>
+<body>
+<header>
+  <svg class="mark" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#00aeef"/><stop offset=".55" stop-color="#ad208e"/><stop offset="1" stop-color="#f47521"/></linearGradient></defs>
+    <path d="M45.5 15.2A21 21 0 1 1 32 11" fill="none" stroke="url(#g)" stroke-width="6.5" stroke-linecap="round"/>
+    <circle cx="50.5" cy="12" r="4.2" fill="#9ccb3b"/>
+    <path d="M22.5 33.2l7 7L44 25.5" fill="none" stroke="#15213b" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
+  <span class="title"><span class="g">AWI Resolve</span> · Session Reports</span>
+  <nav><a id="lf" href="#">Fleet Security</a><a class="on" href="#">Reports</a></nav>
+</header>
+<main><div id="list"><div class="empty">Loading…</div></div></main>
+
+<script>
+const token = new URLSearchParams(location.search).get('token') || '';
+document.getElementById('lf').href = '/fleet?token=' + encodeURIComponent(token);
+const esc = s => String(s == null ? '' : s).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+const when = iso => new Date(iso).toLocaleString();
+
+async function api(p){ const r = await fetch(p + (p.includes('?')?'&':'?') + 'token=' + encodeURIComponent(token), {cache:'no-store'}); if(r.status===401) throw new Error('401'); return r.json(); }
+
+function section(t, html){ return html ? '<h4>'+t+'</h4>'+html : ''; }
+
+// NOTE: do not name this "open" — that collides with the built-in window.open,
+// which silently wins and breaks every click.
+async function openReport(el, id){
+  el.classList.toggle('open');
+  if (el.dataset.loaded || !el.classList.contains('open')) return;
+  const b = el.querySelector('.body');
+  b.innerHTML = 'Loading…';
+  const r = await api('/api/report?id=' + encodeURIComponent(id));
+  const s = r.summary || {};
+  const list = (arr, cls, withWhy) => arr.length ? arr.map(x =>
+    `<div class="item"><span class="ic ${cls}"></span><div>
+       <div class="w">${esc(x.what)}${x.detail?' <span class="d">('+esc(x.detail)+')</span>':''}</div>
+       ${x.result?'<div class="d">'+esc(x.result)+'</div>':''}
+       ${withWhy?'<div class="why"><span class="cat">'+esc(x.category)+'</span>'+esc(x.why)+'</div>':''}
+     </div></div>`).join('') : '<div class="d" style="padding:8px 0">None.</div>';
+
+  b.innerHTML =
+    section('What was wrong', s.diagnosis ? '<p class="s">'+esc(s.diagnosis)+'</p>' : '') +
+    section('What was done', s.fix ? '<p class="s">'+esc(s.fix)+'</p>' : '') +
+    section('Result', s.result ? '<p class="s">'+esc(s.result)+'</p>' : '') +
+    section('What was NOT done (and why)', s.notDone ? '<p class="s">'+esc(s.notDone)+'</p>' : '') +
+    section('Changes made to the machine ('+r.changesMade.length+')', list(r.changesMade,'chg',false)) +
+    section('Actions not taken ('+r.actionsNotTaken.length+')', list(r.actionsNotTaken,'no',true)) +
+    section('Checks run ('+r.checksRun.length+')', list(r.checksRun,'ok',false)) +
+    section('Confidence', s.confidence ? '<p class="s">'+esc(s.confidence)+'</p>' : '') +
+    '<a class="dl" href="/api/report?id='+encodeURIComponent(id)+'&token='+encodeURIComponent(token)+'" target="_blank">Download full record (JSON)</a>';
+  el.dataset.loaded = '1';
+}
+
+(async () => {
+  let d;
+  try { d = await api('/api/reports'); }
+  catch { document.getElementById('list').innerHTML = '<div class="empty">Unauthorised — open with the correct <code>?token=</code>.</div>'; return; }
+  if (!d.reports.length) { document.getElementById('list').innerHTML = '<div class="empty">No sessions yet. A report is written every time Resolve helps someone.</div>'; return; }
+  document.getElementById('list').innerHTML = d.reports.map(r => {
+    const o = r.outcome || {};
+    const tags = [
+      o.changesMade ? `<span class="tag chg">${o.changesMade} change${o.changesMade>1?'s':''}</span>` : '<span class="tag">no changes</span>',
+      o.actionsNotTaken ? `<span class="tag non">${o.actionsNotTaken} not done</span>` : '',
+      o.escalated ? '<span class="tag esc">escalated</span>' : '',
+      `<span class="tag">${o.checksRun} checks</span>`,
+    ].filter(Boolean).join('');
+    return `<div class="row" data-id="${esc(r.reportId)}">
+      <div class="rh"><div><div class="req">${esc(r.request||'(no description)')}</div>
+        <div class="sub">${esc(r.hostname||'unknown PC')} · ${when(r.generatedAt)} · ${r.durationSec}s</div></div>
+        <div class="tags">${tags}</div></div>
+      <div class="body"></div></div>`;
+  }).join('');
+  // Bind after render (avoids inline handlers and global-name collisions)
+  document.querySelectorAll('.row').forEach(el => {
+    el.addEventListener('click', () => openReport(el, el.dataset.id));
+  });
+})();
+</script>
+</body>
+</html>

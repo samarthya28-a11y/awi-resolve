@@ -44,23 +44,25 @@ if (Test-Path "$Root\playbooks\deploy") {
 # `@anthropic-ai` left the installed service crashing on boot with
 # "Cannot find module 'standardwebhooks'", so the support window opened
 # but never connected to the AI.
-$runtimeModules = @(
-  'ws',
-  '@anthropic-ai',
-  'standardwebhooks',
-  '@stablelib',
-  'fast-sha256',
-  'json-schema-to-ts',
-  '@babel',
-  'ts-algebra'
-)
-foreach ($mod in $runtimeModules) {
-  $src = Join-Path $Root "node_modules\$mod"
-  if (-not (Test-Path $src)) {
-    Write-Host "  BUILD FAILED: missing node_modules\$mod — run npm install first" -ForegroundColor Red
-    exit 1
-  }
-  Copy-Item $src (Join-Path $Out "node_modules\$mod") -Recurse -Force
+#
+# Let npm resolve the tree rather than naming packages by hand. The list above
+# was itself the second version of this bug: hand-picking `ws` + `@anthropic-ai`
+# missed standardwebhooks, and any hand-written list goes stale again the next
+# time the SDK adds a dependency. npm always knows the full transitive set.
+Write-Host 'Installing runtime dependencies into the package...' -ForegroundColor Cyan
+$deps = (Get-Content "$Root\package.json" -Raw | ConvertFrom-Json).dependencies
+$pkgJson = @{ name = 'awi-resolve-runtime'; version = '1.0.0'; private = $true
+              dependencies = @{} }
+foreach ($p in $deps.PSObject.Properties) { $pkgJson.dependencies[$p.Name] = $p.Value }
+$pkgJson | ConvertTo-Json -Depth 5 | Set-Content "$Out\package.json" -Encoding utf8
+
+Push-Location $Out
+npm install --omit=dev --no-audit --no-fund --loglevel=error 2>&1 | Out-Null
+$npmFailed = $LASTEXITCODE -ne 0
+Pop-Location
+if ($npmFailed) {
+  Write-Host '  BUILD FAILED: npm install could not resolve runtime dependencies' -ForegroundColor Red
+  exit 1
 }
 
 # Product icon (shortcut / taskbar). Regenerate if missing.
@@ -77,18 +79,31 @@ Copy-Item "$Pkg\Install AWI Resolve.cmd" $Out
 
 # Smoke test: resolve the full runtime import graph without binding ports
 # (requiring agent.js / server.js would start listeners).
-Write-Host 'Verifying the package loads...' -ForegroundColor Cyan
-$probe = & "$Out\node.exe" -e @"
+#
+# Run it against a copy OUTSIDE the repo. Node resolves a module by walking up
+# the directory tree, so probing dist\ — which lives inside the repo — can
+# satisfy a missing dependency from the repo's OWN node_modules and report a
+# healthy package. That is not hypothetical: it is exactly how the missing
+# standardwebhooks passed this check and still crashed on the customer's PC.
+Write-Host 'Verifying the package loads (isolated from the repo)...' -ForegroundColor Cyan
+$probeDir = Join-Path ([IO.Path]::GetTempPath()) ("awi-resolve-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8))
+Copy-Item $Out $probeDir -Recurse -Force
+try {
+  $probe = & "$probeDir\node.exe" -e @"
 process.chdir(process.argv[1]);
-['ws','@anthropic-ai/sdk','standardwebhooks'].forEach(require);
+['ws','@anthropic-ai/sdk'].forEach(require);
 require('./agent/tools');
 require('./orchestrator/licensing');
 require('./orchestrator/ai');
 require('./orchestrator/kb');
 require('./orchestrator/manuals');
 console.log('ok');
-"@ $Out 2>&1
-if ($LASTEXITCODE -ne 0) {
+"@ $probeDir 2>&1
+  $probeFailed = $LASTEXITCODE -ne 0
+} finally {
+  Remove-Item $probeDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+if ($probeFailed) {
   Write-Host '  BUILD FAILED: package is missing a module the service needs' -ForegroundColor Red
   Write-Host "  $probe" -ForegroundColor Red
   exit 1

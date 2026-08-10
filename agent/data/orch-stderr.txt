@@ -1,0 +1,36 @@
+node:internal/modules/cjs/loader:1573
+  throw err;
+  ^
+
+Error: Cannot find module 'standardwebhooks'
+Require stack:
+- C:\Program Files\AWI Resolve\node_modules\@anthropic-ai\sdk\resources\beta\webhooks.js
+- C:\Program Files\AWI Resolve\node_modules\@anthropic-ai\sdk\resources\beta\beta.js
+- C:\Program Files\AWI Resolve\node_modules\@anthropic-ai\sdk\resources\index.js
+- C:\Program Files\AWI Resolve\node_modules\@anthropic-ai\sdk\client.js
+- C:\Program Files\AWI Resolve\node_modules\@anthropic-ai\sdk\index.js
+- C:\Program Files\AWI Resolve\orchestrator\ai.js
+- C:\Program Files\AWI Resolve\orchestrator\server.js
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1569:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1123:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1147:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1174:12)
+    at Module._load (node:internal/modules/cjs/loader:1346:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1679:12)
+    at require (node:internal/modules/helpers:196:16)
+    at Object.<anonymous> (C:\Program Files\AWI Resolve\node_modules\@anthropic-ai\sdk\resources\beta\webhooks.js:6:28)
+    at Module._compile (node:internal/modules/cjs/loader:1934:14) {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [
+    'C:\\Program Files\\AWI Resolve\\node_modules\\@anthropic-ai\\sdk\\resources\\beta\\webhooks.js',
+    'C:\\Program Files\\AWI Resolve\\node_modules\\@anthropic-ai\\sdk\\resources\\beta\\beta.js',
+    'C:\\Program Files\\AWI Resolve\\node_modules\\@anthropic-ai\\sdk\\resources\\index.js',
+    'C:\\Program Files\\AWI Resolve\\node_modules\\@anthropic-ai\\sdk\\client.js',
+    'C:\\Program Files\\AWI Resolve\\node_modules\\@anthropic-ai\\sdk\\index.js',
+    'C:\\Program Files\\AWI Resolve\\orchestrator\\ai.js',
+    'C:\\Program Files\\AWI Resolve\\orchestrator\\server.js'
+  ]
+}
+
+Node.js v26.7.0
