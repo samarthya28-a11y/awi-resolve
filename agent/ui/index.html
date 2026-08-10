@@ -79,7 +79,8 @@
   .consent.answered { opacity:.55; }
   .consent.answered .btns { display:none; }
 
-  footer { display:flex; gap:12px; padding:16px 22px; background:#fff; border-top:1px solid var(--line); }
+  footer { display:flex; gap:12px; padding:16px 22px; background:#fff; border-top:1px solid var(--line); position:relative; }
+  footer.drag-over { outline:2px dashed var(--brand-blue); outline-offset:-6px; background:rgba(0,174,239,.06); }
   #box { flex:1; resize:none; font-family:inherit; font-size:14.5px; color:var(--ink);
          background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:12px 15px; max-height:130px; }
   #box:focus { outline:none; border-color:var(--brand-blue); box-shadow:0 0 0 3px rgba(0,174,239,.15); }
@@ -89,6 +90,10 @@
   #send { background:var(--brand-orange); color:#fff; box-shadow:0 8px 20px rgba(244,117,33,.28); padding:12px 24px; }
   #send:hover:not(:disabled) { transform:translateY(-1px); }
   #send:disabled { opacity:.5; cursor:default; box-shadow:none; }
+  .shot { align-self:flex-end; max-width:min(320px,70%); border-radius:14px; border:1px solid var(--line);
+          box-shadow:var(--shadow-soft); overflow:hidden; background:#fff; }
+  .shot img { display:block; max-width:100%; max-height:220px; object-fit:contain; }
+  .shot .cap { font-size:11.5px; font-weight:600; color:var(--muted); padding:6px 10px; border-top:1px solid var(--line); }
   ::-webkit-scrollbar { width:10px; } ::-webkit-scrollbar-thumb { background:#d3d9e4; border-radius:6px; border:3px solid var(--surface); }
 </style>
 </head>
@@ -102,8 +107,8 @@
   <div id="feed"></div>
   <footer>
     <input type="file" id="file" accept=".txt,.md,.log,.csv,.json,.htm,.html,.png,.jpg,.jpeg,.gif,.webp" hidden />
-    <button id="attach" class="ghost" title="Attach a manual, log, or a screenshot of an error">📎</button>
-    <textarea id="box" rows="1" placeholder="Describe your computer problem…"></textarea>
+    <button id="attach" class="ghost" title="Attach a manual, log, or a screenshot (or paste with Ctrl+V)">📎</button>
+    <textarea id="box" rows="1" placeholder="Describe the problem — or paste a screenshot (Ctrl+V)…"></textarea>
     <button id="send">Get help</button>
   </footer>
 
@@ -193,7 +198,11 @@ function armWatchdog() {
   }, 120000);
 }
 function setBusy(b) {
-  busy = b; send.disabled = b; box.disabled = b; send.textContent = b ? 'Working…' : 'Get help';
+  busy = b; send.disabled = b; send.textContent = b ? 'Working…' : 'Get help';
+  // Keep the box editable so users can still paste screenshots / type while waiting.
+  box.placeholder = b
+    ? 'Working… you can still paste a screenshot (Ctrl+V) or type notes'
+    : 'Describe the problem — or paste a screenshot (Ctrl+V)…';
   if (b) armWatchdog(); else clearTimeout(watchdog);
 }
 function submit() {
@@ -213,40 +222,59 @@ send.onclick = submit;
 box.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
 
 // Attach a manual / guide / screenshot. Works before OR during a request.
-// Setup installers (.exe/.msi) are NOT accepted here — ask Resolve to download them.
+// Screenshots: paperclip, Ctrl+V paste into the chat box, or drag-and-drop.
+// Setup installers (.exe/.msi) are NOT accepted — ask Resolve to download them.
 const fileInput = document.getElementById('file');
+const footer = document.querySelector('footer');
 document.getElementById('attach').onclick = () => fileInput.click();
 fileInput.accept = '.pdf,.txt,.md,.log,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,text/plain,application/pdf,image/*';
-fileInput.onchange = () => {
-  const f = fileInput.files && fileInput.files[0];
+
+function showShotPreview(dataUrl, label) {
+  const wrap = document.createElement('div');
+  wrap.className = 'shot';
+  const img = document.createElement('img');
+  img.src = dataUrl;
+  img.alt = label || 'Screenshot';
+  const cap = document.createElement('div');
+  cap.className = 'cap';
+  cap.textContent = label || 'Screenshot attached';
+  wrap.appendChild(img);
+  wrap.appendChild(cap);
+  feed.appendChild(wrap);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function attachFile(f, sourceLabel) {
   if (!f) return;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
     el('msg sys', 'Still connecting — please try attaching again in a moment.');
-    fileInput.value = ''; return;
+    return;
   }
-  const name = (f.name || '').toLowerCase();
+  const name = (f.name || sourceLabel || 'screenshot.png').toLowerCase();
   const isInstaller = /\.(exe|msi|msix|dmg|pkg|bat|cmd|ps1|zip|7z|rar)$/i.test(name);
   if (isInstaller) {
     el('msg sys', 'Do not attach setup/installer files. Describe what to install (or paste the official HTTPS download link) and press Get help — Resolve will download and install it with your approval.');
-    fileInput.value = ''; return;
+    return;
   }
-  const isImage = /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp)$/i.test(name);
+  const isImage = /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp)$/i.test(name) || (!f.name && /^image\//.test(f.type));
   const isPdf = f.type === 'application/pdf' || name.endsWith('.pdf');
   const maxBytes = isImage ? 8 * 1024 * 1024 : 25 * 1024 * 1024;
   if (f.size > maxBytes) {
     el('msg sys', isImage
       ? 'That image is too large (max 8 MB). Please attach a smaller screenshot.'
       : 'That document is too large (max 25 MB). Please attach a smaller manual, or a text export of the key pages.');
-    fileInput.value = ''; return;
+    return;
   }
-  el('msg sys', 'Reading "' + f.name + '"…');
+  const displayName = f.name || sourceLabel || 'screenshot.png';
+  el('msg sys', 'Reading "' + displayName + '"…');
   const reader = new FileReader();
   reader.onload = () => {
     if (isImage) {
       const s = String(reader.result || '');
       const data = s.slice(s.indexOf(',') + 1);
-      ws.send(JSON.stringify({ type: 'attach_image', mediaType: f.type || 'image/png', data }));
-      el('msg sys', 'Screenshot attached — describe what you were doing and press "Get help".');
+      const mediaType = (f.type && f.type.startsWith('image/')) ? f.type : 'image/png';
+      ws.send(JSON.stringify({ type: 'attach_image', mediaType, data }));
+      showShotPreview(s, 'Screenshot attached — describe what you see and press Get help');
     } else if (isPdf) {
       const buf = reader.result;
       const bytes = new Uint8Array(buf);
@@ -256,17 +284,69 @@ fileInput.onchange = () => {
         binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
       }
       const data = btoa(binary);
-      ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, encoding: 'pdf-base64', data }));
+      ws.send(JSON.stringify({ type: 'attach_manual', title: displayName, encoding: 'pdf-base64', data }));
+      el('msg sys', 'Manual attached — describe the problem and press "Get help".');
     } else {
-      ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, text: String(reader.result || '') }));
+      ws.send(JSON.stringify({ type: 'attach_manual', title: displayName, text: String(reader.result || '') }));
+      el('msg sys', 'Document attached — describe the problem and press "Get help".');
     }
-    fileInput.value = '';
   };
-  reader.onerror = () => { el('msg sys', "Sorry, that file couldn't be read."); fileInput.value = ''; };
+  reader.onerror = () => { el('msg sys', "Sorry, that file couldn't be read."); };
   if (isImage) reader.readAsDataURL(f);
   else if (isPdf) reader.readAsArrayBuffer(f);
   else reader.readAsText(f);
+}
+
+fileInput.onchange = () => {
+  const f = fileInput.files && fileInput.files[0];
+  fileInput.value = '';
+  if (f) attachFile(f);
 };
+
+// Paste a screenshot (Win+Shift+S → Ctrl+V) anywhere in the window / chat box.
+document.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind === 'file' && /^image\//.test(it.type)) {
+      e.preventDefault();
+      const blob = it.getAsFile();
+      if (!blob) return;
+      // Clipboard images often have no filename — give one so size/type checks work.
+      const file = new File([blob], 'screenshot.' + (it.type.split('/')[1] || 'png'), { type: it.type || 'image/png' });
+      attachFile(file, 'pasted screenshot');
+      return;
+    }
+  }
+});
+
+// Drag-and-drop onto the composer (or the whole window).
+function hasFiles(e) {
+  const types = e.dataTransfer && e.dataTransfer.types;
+  return types && (types.contains ? types.contains('Files') : Array.from(types).includes('Files'));
+}
+['dragenter', 'dragover'].forEach((ev) => {
+  window.addEventListener(ev, (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    footer.classList.add('drag-over');
+  });
+});
+['dragleave', 'drop'].forEach((ev) => {
+  window.addEventListener(ev, (e) => {
+    if (ev === 'drop' && hasFiles(e)) e.preventDefault();
+    footer.classList.remove('drag-over');
+  });
+});
+window.addEventListener('drop', (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  footer.classList.remove('drag-over');
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (!files || !files.length) return;
+  attachFile(files[0]);
+});
 
 connect();
 </script>
