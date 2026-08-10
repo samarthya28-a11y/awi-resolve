@@ -212,10 +212,11 @@ function submit() {
 send.onclick = submit;
 box.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
 
-// Attach a manual / guide. Works before OR during a request — if the technician
-// is already working, it picks the document up and carries on with it.
+// Attach a manual / guide / screenshot. Works before OR during a request.
+// Setup installers (.exe/.msi) are NOT accepted here — ask Resolve to download them.
 const fileInput = document.getElementById('file');
 document.getElementById('attach').onclick = () => fileInput.click();
+fileInput.accept = '.pdf,.txt,.md,.log,.csv,.json,.png,.jpg,.jpeg,.gif,.webp,text/plain,application/pdf,image/*';
 fileInput.onchange = () => {
   const f = fileInput.files && fileInput.files[0];
   if (!f) return;
@@ -223,26 +224,48 @@ fileInput.onchange = () => {
     el('msg sys', 'Still connecting — please try attaching again in a moment.');
     fileInput.value = ''; return;
   }
-  if (f.size > 2 * 1024 * 1024) {
-    el('msg sys', 'That file is too large (max 2 MB). Please attach a smaller document.');
+  const name = (f.name || '').toLowerCase();
+  const isInstaller = /\.(exe|msi|msix|dmg|pkg|bat|cmd|ps1|zip|7z|rar)$/i.test(name);
+  if (isInstaller) {
+    el('msg sys', 'Do not attach setup/installer files. Describe what to install (or paste the official HTTPS download link) and press Get help — Resolve will download and install it with your approval.');
     fileInput.value = ''; return;
   }
+  const isImage = /^image\//.test(f.type) || /\.(png|jpe?g|gif|webp)$/i.test(name);
+  const isPdf = f.type === 'application/pdf' || name.endsWith('.pdf');
+  const maxBytes = isImage ? 8 * 1024 * 1024 : 25 * 1024 * 1024;
+  if (f.size > maxBytes) {
+    el('msg sys', isImage
+      ? 'That image is too large (max 8 MB). Please attach a smaller screenshot.'
+      : 'That document is too large (max 25 MB). Please attach a smaller manual, or a text export of the key pages.');
+    fileInput.value = ''; return;
+  }
+  el('msg sys', 'Reading "' + f.name + '"…');
   const reader = new FileReader();
-  const isImage = /^image\//.test(f.type);
   reader.onload = () => {
     if (isImage) {
-      // data URL -> base64 payload
       const s = String(reader.result || '');
       const data = s.slice(s.indexOf(',') + 1);
-      ws.send(JSON.stringify({ type: 'attach_image', mediaType: f.type, data }));
+      ws.send(JSON.stringify({ type: 'attach_image', mediaType: f.type || 'image/png', data }));
       el('msg sys', 'Screenshot attached — describe what you were doing and press "Get help".');
+    } else if (isPdf) {
+      const buf = reader.result;
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      }
+      const data = btoa(binary);
+      ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, encoding: 'pdf-base64', data }));
     } else {
       ws.send(JSON.stringify({ type: 'attach_manual', title: f.name, text: String(reader.result || '') }));
     }
     fileInput.value = '';
   };
   reader.onerror = () => { el('msg sys', "Sorry, that file couldn't be read."); fileInput.value = ''; };
-  if (isImage) reader.readAsDataURL(f); else reader.readAsText(f);
+  if (isImage) reader.readAsDataURL(f);
+  else if (isPdf) reader.readAsArrayBuffer(f);
+  else reader.readAsText(f);
 };
 
 connect();

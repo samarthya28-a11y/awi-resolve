@@ -14,10 +14,11 @@ const { getEntry, listProducts } = require('./catalog');
 const PS_TIMEOUT_MS = 30000;
 const INSTALL_TIMEOUT_MS = 300000; // 5 min for an installer to finish
 // Full IT Support (Tier-2) — consented arbitrary PowerShell, hard caps.
-const FULL_PS_TIMEOUT_MS = 90000;
-const FULL_PS_MAX_COMMAND = 4000;
-const FULL_PS_MAX_OUTPUT = 32 * 1024;
-const FULL_PS_MAX_BUFFER = 512 * 1024;
+// Installs/downloads routinely exceed 90s; keep this aligned with cloud wait.
+const FULL_PS_TIMEOUT_MS = 300000; // 5 min
+const FULL_PS_MAX_COMMAND = 8000;
+const FULL_PS_MAX_OUTPUT = 48 * 1024;
+const FULL_PS_MAX_BUFFER = 2 * 1024 * 1024;
 
 // Fixed list of services the agent may inspect (Tier-0) — spec §6.
 const ALLOWED_SERVICES = ['Spooler', 'Dhcp', 'Dnscache', 'W32Time', 'wuauserv', 'LanmanWorkstation'];

@@ -154,7 +154,8 @@ async function resolveCloudTool(ws, deviceId, customerId, name, input) {
 // for a download + installer run (agent caps the installer at 5 min).
 const TOOL_TIMEOUT_MS = 120000;         // read-only + quick fixes (> 60s consent)
 const DEPLOY_TIMEOUT_MS = 480000;       // consent + download + install + verify
-const FULL_SHELL_TIMEOUT_MS = 180000;   // consent 60s + PowerShell up to 90s + buffer
+const FULL_SHELL_TIMEOUT_MS = 420000;   // consent 60s + PowerShell up to 5 min + buffer
+const TICKET_HARD_TIMEOUT_MS = 15 * 60 * 1000; // force-clear busy if a ticket hangs
 
 // Read-only naming convention, same as the session report uses.
 const READ_ONLY_TOOL = /^(get_|list_|read_|check_|test_|search_)/;
@@ -199,7 +200,7 @@ function licenseAllows(deviceId, toolId) {
   return { allowed: true };
 }
 
-function callTool(ws, deviceId, toolId, params) {
+function callTool(ws, deviceId, toolId, params, onProgress) {
   const gate = licenseAllows(deviceId, toolId);
   if (!gate.allowed) {
     audit({ event: 'tool_call_unlicensed', deviceId, toolId });
@@ -213,15 +214,39 @@ function callTool(ws, deviceId, toolId, params) {
   }
   return new Promise((resolve) => {
     const callId = crypto.randomUUID();
-    pendingCalls.set(callId, resolve);
+    let settled = false;
+    let beat = null;
+    let timer = null;
+    const finish = (msg) => {
+      if (settled) return;
+      settled = true;
+      if (beat) clearInterval(beat);
+      if (timer) clearTimeout(timer);
+      pendingCalls.delete(callId);
+      resolve(msg);
+    };
+    pendingCalls.set(callId, finish);
     audit({ event: 'tool_call_sent', deviceId, toolId, params });
     ws.send(JSON.stringify({ type: 'tool_call', callId, toolId, params }));
     const ms = (toolId === 'deploy_software' || toolId === 'deploy_pinned_software')
       ? DEPLOY_TIMEOUT_MS
       : (toolId === 'run_powershell' ? FULL_SHELL_TIMEOUT_MS : TOOL_TIMEOUT_MS);
-    setTimeout(() => {
-      if (pendingCalls.delete(callId)) resolve({ status: 'timeout', toolId });
-    }, ms);
+    // Keep the customer UI alive during long downloads/installs.
+    const heartbeatEvery = 25000;
+    let elapsed = 0;
+    beat = setInterval(() => {
+      if (settled) { clearInterval(beat); return; }
+      elapsed += heartbeatEvery;
+      const secs = Math.round(elapsed / 1000);
+      if (typeof onProgress === 'function') {
+        onProgress(
+          toolId === 'run_powershell' || toolId === 'deploy_software' || toolId === 'deploy_pinned_software'
+            ? `Still working on ${toolId.replace(/_/g, ' ')}… (${secs}s). Large downloads can take a few minutes.`
+            : `Still running ${toolId.replace(/_/g, ' ')}… (${secs}s)`
+        );
+      }
+    }, heartbeatEvery);
+    timer = setTimeout(() => finish({ status: 'timeout', toolId }), ms);
   });
 }
 
@@ -306,7 +331,21 @@ async function runTicket(ws, deviceId, ticket) {
     return;
   }
   busyDevices.add(deviceId);
+  let hardTimer = null;
   try {
+    hardTimer = setTimeout(() => {
+      if (!busyDevices.has(deviceId)) return;
+      log(`ticket hard-timeout for ${deviceId} — clearing busy lock`);
+      busyDevices.delete(deviceId);
+      try {
+        ws.send(JSON.stringify({
+          type: 'ai_update',
+          text: 'That request took too long and was stopped so you can try again. If you were installing software, say so and I will continue from where it left off.',
+        }));
+        ws.send(JSON.stringify({ type: 'ticket_done' }));
+      } catch { /* ws may be closed */ }
+    }, TICKET_HARD_TIMEOUT_MS);
+
     // Resume an in-flight conversation if the customer is replying to us.
     const prior = conversations.get(deviceId);
     const isFollowUp = !!(prior && (Date.now() - prior.lastAt) < CONVERSATION_TTL_MS);
@@ -320,7 +359,9 @@ async function runTicket(ws, deviceId, ticket) {
     // Only re-snapshot at the start of a session; a follow-up already has context.
     let snapshot = null;
     if (!isFollowUp) {
-      const snap = await callTool(ws, deviceId, 'get_system_snapshot', {});
+      const snap = await callTool(ws, deviceId, 'get_system_snapshot', {}, (text) => {
+        ws.send(JSON.stringify({ type: 'ai_update', text }));
+      });
       snapshot = snap.status === 'ok' ? snap.result : null;
     }
 
@@ -330,11 +371,12 @@ async function runTicket(ws, deviceId, ticket) {
     const lic = deviceLicenses.get(deviceId);
     const fullItSupport = !!(lic && lic.caps && lic.caps.fullSupport
       && orgLibrary.isFullItSupportAllowed(customerId));
+    const progress = (text) => ws.send(JSON.stringify({ type: 'ai_update', text }));
     const result = await diagnose({
       apiKey: API_KEY,
       ticket,
       snapshot,
-      callTool: (toolId, params) => callTool(ws, deviceId, toolId, params),
+      callTool: (toolId, params) => callTool(ws, deviceId, toolId, params, progress),
       manuals: MANUALS,
       // Documents attached before this ticket started...
       customerManuals: (() => {
@@ -426,6 +468,7 @@ async function runTicket(ws, deviceId, ticket) {
     ws.send(JSON.stringify({ type: 'ai_update', text: 'Something went wrong on our side. Please try again shortly.' }));
     ws.send(JSON.stringify({ type: 'ticket_done' }));
   } finally {
+    if (hardTimer) clearTimeout(hardTimer);
     busyDevices.delete(deviceId);
   }
 }
@@ -732,7 +775,7 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'attach_manual' && deviceId) {
       const doc = { title: String(msg.title || 'Document').slice(0, 120),
-                    text: String(msg.text || '').slice(0, 200000) };
+                    text: String(msg.text || '').slice(0, 500000) };
       const q = customerManuals.get(deviceId) || { pending: [], all: [] };
       q.pending.push(doc);
       q.all.push(doc);

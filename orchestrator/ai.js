@@ -15,6 +15,9 @@ const { searchKb } = require('./kb');
 
 const MODEL = 'claude-opus-4-8';
 const MAX_STEPS = 16;
+const MAX_STEPS_FULL = 28;
+const API_CALL_TIMEOUT_MS = 180000;
+const TOOL_RESULT_CAP = 12000; // keep conversation context from ballooning on huge PS output
 
 // Tools resolved in the cloud (knowledge / org library), NOT chosen freely by the
 // model as agent-side URL installs. deploy_org_software is resolved here and then
@@ -378,6 +381,7 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
   resetUsage();
   const sessionTools = toolsForSession(fullItSupport);
   const sessionSystem = systemForSession(fullItSupport);
+  const maxSteps = fullItSupport ? MAX_STEPS_FULL : MAX_STEPS;
 
   const deployNote = manuals.length
     ? `Software you have Alpha Web deployment manuals for (use read_deployment_manual to guide an install): ${manuals.map((m) => m.product).join(', ')}.\n\n`
@@ -389,7 +393,7 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
     (snapshot ? `Machine snapshot captured when the ticket opened:\n${JSON.stringify(snapshot, null, 2)}\n\n` : '') +
     deployNote +
     (fullItSupport
-      ? 'Full IT Support is ON. After checking catalogs, if the customer asks to install ordinary software that is not listed, use run_powershell with the official HTTPS installer (consent shows exact commands). Warn briefly about risks (e.g. dual antivirus) but do not refuse solely because it is off-catalog.\n\n'
+      ? 'Full IT Support is ON. After checking catalogs, if the customer asks to install ordinary software that is not listed, use run_powershell with the official HTTPS installer (consent shows exact commands). Warn briefly about risks (e.g. dual antivirus) but do not refuse solely because it is off-catalog. For large installs, prefer winget or a silent official installer and expect downloads to take a few minutes.\n\n'
       : '') +
     `Investigate, fix what you can, or guide a deployment — and resolve the ticket.`;
 
@@ -404,7 +408,7 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
   }
   const toolCalls = [];
 
-  for (let step = 0; step < MAX_STEPS; step++) {
+  for (let step = 0; step < maxSteps; step++) {
     // A manual the customer attaches WHILE we're working is picked up here and
     // folded into the conversation immediately — so the AI can read it and carry
     // on helping in the same session, without restarting the ticket.
@@ -417,9 +421,25 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
     }
 
     moveConversationCachePoint(messages);
-    const response = await client.messages.create({
-      model: MODEL, max_tokens: 4096, system: sessionSystem, tools: sessionTools, messages,
-    });
+    let response;
+    try {
+      response = await Promise.race([
+        client.messages.create({
+          model: MODEL, max_tokens: 4096, system: sessionSystem, tools: sessionTools, messages,
+        }),
+        new Promise((_, reject) => setTimeout(
+          () => reject(new Error(`Claude API timed out after ${API_CALL_TIMEOUT_MS / 1000}s`)),
+          API_CALL_TIMEOUT_MS
+        )),
+      ]);
+    } catch (e) {
+      onUpdate(`I hit a temporary pause talking to the AI service (${e.message}). Please send your last request again and I will continue.`);
+      return {
+        report: 'DIAGNOSIS: The AI service timed out or failed mid-session.\nFIX: None completed in this turn.\nOUTCOME: Please retry — say "continue" to pick up where we left off.\nNOT DONE: Remaining steps from your request.\nEVIDENCE: API/network timeout.\nCONFIDENCE: low.',
+        escalate: false, toolCalls, steps: step + 1, stopReason: 'api_timeout',
+        usage: usageSummary(), messages,
+      };
+    }
     recordCacheUsage(response.usage);
     messages.push({ role: 'assistant', content: response.content });
 
@@ -466,18 +486,24 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
         result: digest,                       // what it found/did
       });
       const ok = agentResult.status === 'ok';
+      let content = ok
+        ? JSON.stringify(agentResult.result)
+        : `Tool did not run (${agentResult.status}): ${agentResult.reason || agentResult.error || 'unknown reason'}`;
+      if (content.length > TOOL_RESULT_CAP) {
+        content = content.slice(0, TOOL_RESULT_CAP) + '\n…[truncated for session size]';
+      }
       results.push({
         type: 'tool_result', tool_use_id: tu.id, is_error: !ok,
-        content: ok ? JSON.stringify(agentResult.result)
-                    : `Tool did not run (${agentResult.status}): ${agentResult.reason || agentResult.error || 'unknown reason'}`,
+        content,
       });
     }
     messages.push({ role: 'user', content: results });
   }
 
   return {
-    report: 'DIAGNOSIS: Inconclusive within the step limit.\nOUTCOME: Escalated to a human technician.\nCONFIDENCE: low.',
-    escalate: true, toolCalls, steps: MAX_STEPS, stopReason: 'max_steps',
+    report: 'DIAGNOSIS: Inconclusive within the step limit.\nOUTCOME: Not finished — reply "continue" and I will keep going from here.\nCONFIDENCE: low.\nESCALATE: no',
+    escalate: false, toolCalls, steps: maxSteps, stopReason: 'max_steps',
+    usage: usageSummary(), messages,
   };
 }
 

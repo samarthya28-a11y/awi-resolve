@@ -104,17 +104,43 @@ function startUiServer() {
       } else if (m.type === 'attach_manual') {
         // Customer-supplied reference document. Forwarded to the AI as untrusted
         // data; size-capped so a huge file can't blow up the session.
-        const title = String(m.title || 'Document').slice(0, 120);
-        const text = String(m.text || '').slice(0, 200000);
-        if (!text.trim()) {
-          toUI({ type: 'status', text: "That file looked empty — please try another." });
-        } else if (orchWs && orchWs.readyState === WebSocket.OPEN) {
-          log(`customer attached a document: "${title}" (${text.length} chars)`);
-          orchWs.send(JSON.stringify({ type: 'attach_manual', title, text }));
-          toUI({ type: 'action', text: `Attached "${title}" — the technician will use it.` });
-        } else {
-          toUI({ type: 'status', text: 'Not connected to the support service — please try again in a moment.' });
-        }
+        (async () => {
+          try {
+            const title = String(m.title || 'Document').slice(0, 120);
+            let text = '';
+            if (m.encoding === 'pdf-base64' && m.data) {
+              toUI({ type: 'status', text: `Reading PDF "${title}"…` });
+              let pdfParse;
+              try { pdfParse = require('pdf-parse'); } catch {
+                toUI({ type: 'status', text: 'PDF support is not installed on this agent. Please attach a .txt/.md copy of the manual, or paste the key steps.' });
+                return;
+              }
+              const buf = Buffer.from(String(m.data), 'base64');
+              const parsed = await pdfParse(buf);
+              text = String(parsed.text || '').trim();
+              if (!text) {
+                toUI({ type: 'status', text: `Could not extract text from "${title}". Try a text export of the manual.` });
+                return;
+              }
+            } else {
+              text = String(m.text || '');
+            }
+            text = text.slice(0, 500000);
+            if (!text.trim()) {
+              toUI({ type: 'status', text: 'That file looked empty — please try another.' });
+              return;
+            }
+            if (orchWs && orchWs.readyState === WebSocket.OPEN) {
+              log(`customer attached a document: "${title}" (${text.length} chars)`);
+              orchWs.send(JSON.stringify({ type: 'attach_manual', title, text }));
+              toUI({ type: 'action', text: `Attached "${title}" (${Math.round(text.length / 1000)}k chars) — the technician will use it.` });
+            } else {
+              toUI({ type: 'status', text: 'Not connected to the support service — please try again in a moment.' });
+            }
+          } catch (e) {
+            toUI({ type: 'status', text: `Could not read that document: ${e.message}` });
+          }
+        })();
       } else if (m.type === 'attach_image') {
         // A screenshot of an error dialog — often the only way to show a message
         // that can't be copied as text.

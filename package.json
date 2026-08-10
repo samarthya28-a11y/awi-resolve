@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.115.0",
+    "pdf-parse": "^1.1.1",
     "ws": "^8.18.0"
   }
 }
