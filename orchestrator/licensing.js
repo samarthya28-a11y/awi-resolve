@@ -36,6 +36,12 @@ function loadPublicKey() {
 const PLANS = {
   none:     { label: 'Unlicensed',      diagnostics: true, fixes: false, deployment: false, security: false, fullSupport: false },
   trial:    { label: 'Trial',           diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: false },
+  // One-off paid pass, sold per incident. Deliberately bounded by TIME, not by
+  // "one session": the licence model counts days, and nothing anywhere counts
+  // sessions — so a plan sold as single-session would be unenforceable, and a
+  // promise we cannot keep is worse than a simpler one we can. Same safety
+  // envelope as Standard.
+  incident: { label: '24-hour pass',    diagnostics: true, fixes: true,  deployment: false, security: true,  fullSupport: false },
   standard: { label: 'Standard',        diagnostics: true, fixes: true,  deployment: false, security: true,  fullSupport: false },
   pro:      { label: 'Pro',             diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: false },
   // Full IT Support — allowlisted tools PLUS consented PowerShell (org admin must also enable).

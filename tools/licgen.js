@@ -19,7 +19,13 @@ const path = require('path');
 
 const PRIV = path.join(__dirname, 'licensing-key.pem');
 const PUB = path.join(__dirname, '..', 'orchestrator', 'licensing-key.pub');
-const PLANS = ['trial', 'standard', 'pro', 'full'];
+const PLANS = ['trial', 'incident', 'standard', 'pro', 'full'];
+
+// Default validity per plan. `incident` is the paid one-off pass: bounded by a
+// day rather than by "one session", because nothing in the licence model counts
+// sessions and selling something unenforceable is how a price list starts
+// lying.
+const DEFAULT_DAYS = { trial: 15, incident: 1 };
 
 function init() {
   if (fs.existsSync(PRIV)) {
@@ -48,7 +54,7 @@ function issue() {
   const customer = arg('customer');
   const plan = (arg('plan', 'trial') || '').toLowerCase();
   const seats = Number(arg('seats', '1'));
-  const days = Number(arg('days', plan === 'trial' ? '15' : '365'));
+  const days = Number(arg('days', String(DEFAULT_DAYS[plan] || 365)));
   const devices = (arg('devices') || '').split(',').map((s) => s.trim()).filter(Boolean);
 
   if (!customer) { console.error('Missing --customer "Name"'); process.exit(1); }

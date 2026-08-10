@@ -1,9 +1,0 @@
-{
-  "_comment": "AWI Resolve agent settings. For a real customer install, set orchestratorUrl to the hosted connector (wss://connect.alphawebin.com) and enrollmentSecret to the same door key you set on the connector (fly secrets set RESOLVE_ENROLLMENT_SECRET=...). For the local demo, leave the localhost values.",
-  "_licenseKey": "Paste the RSLIC1-... key issued by Create-License.cmd. Without it the machine still gets full diagnostics, but fixes and deployment are withheld.",
-  "orchestratorUrl": "ws://127.0.0.1:8787",
-  "enrollmentSecret": "",
-  "licenseKey": "",
-  "customerId": "",
-  "uiPort": 8790
-}

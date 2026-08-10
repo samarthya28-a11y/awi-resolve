@@ -3,3 +3,8 @@
 tools/licensing-key.pem
 packaging/full-license-key.txt
 orchestrator/data/
+
+# Build output. Regenerate with packaginguild.ps1 — never commit it: the
+# tracked copy is missing node_modules (correctly ignored) so it cannot run,
+# and every rebuild produces a large meaningless diff.
+dist/
