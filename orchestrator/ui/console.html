@@ -96,7 +96,9 @@ function renderTickets(tk) {
   $('tickets').innerHTML = `
     <div class="card">
       <h2 style="margin:0 0 4px;font-size:16px">Support tickets</h2>
-      <p class="muted" style="margin:0 0 14px">One ticket is one AI support session. Unused tickets carry over.</p>
+      <p class="muted" style="margin:0 0 14px">One ticket is one AI support session — counted whether or not the problem
+      could be fixed, since the investigation and report are the work. A session that fails before doing anything
+      is not counted. Unused tickets carry over.</p>
       <div class="totals" style="margin-bottom:${note ? '12px' : '0'}">
         <div class="stat"><b style="color:${colour}">${tk.balance}</b><span>Remaining</span></div>
         <div class="stat"><b>${tk.usedThisPeriod}</b><span>Used this month</span></div>
