@@ -379,11 +379,19 @@ async function runTicket(ws, deviceId, ticket) {
       fullItSupport,
       hasImages: images.length > 0,
       isFollowUp,
+      conversationModel: isFollowUp && prior ? prior.model : null,
     });
     // Prepaid tickets: check before the model runs, so a session that cannot be
     // paid for never costs anything. Orgs with no ledger are unmetered and pass
     // straight through — metering must not block anyone it was never set up for.
-    const gate = customerId ? ledger.canOpen(customerId, deviceId) : { allowed: true, metered: false };
+    // A ticket is a CONVERSATION, not a message. Asking a follow-up question is
+    // how support works — billing each counter-question separately would punish
+    // people for the product behaving well, and it is the kind of surprise a
+    // customer only discovers from their balance. The continuation is already
+    // paid for, so a follow-up neither checks the balance nor spends again.
+    const gate = (customerId && !isFollowUp)
+      ? ledger.canOpen(customerId, deviceId)
+      : { allowed: true, metered: false, continuation: isFollowUp };
     if (!gate.allowed) {
       log(`ticket refused for ${customerId}/${deviceId}: out of tickets or over quota`);
       audit({ event: 'ticket_refused_no_credit', deviceId, customerId });
@@ -419,6 +427,7 @@ async function runTicket(ws, deviceId, ticket) {
       images,
       resolveCloudTool: (name, input) => resolveCloudTool(ws, deviceId, customerId, name, input),
       fullItSupport,
+      model: routedModel,   // decided once, above — logged and run are the same
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
     });
@@ -428,6 +437,9 @@ async function runTicket(ws, deviceId, ticket) {
       messages: result.messages || [],
       lastAt: Date.now(),
       opened: isFollowUp && prior ? prior.opened : new Date().toISOString(),
+      // Carried so follow-ups inherit the conversation's model rather than
+      // silently escalating to the expensive one on every counter-question.
+      model: routedModel,
     });
 
     const durationSec = +((Date.now() - started) / 1000).toFixed(1);
@@ -465,7 +477,7 @@ async function runTicket(ws, deviceId, ticket) {
     // Spend the ticket now the work is done. A session that ran no tools and
     // produced no report gave the customer nothing, so it is recorded but not
     // billed — a few rupees to avoid an argument we would deserve to lose.
-    if (customerId && gate.metered) {
+    if (customerId && gate.metered && !isFollowUp) {
       const didWork = result.toolCalls.length > 0 || !!(result.report && result.report.trim());
       const spent = ledger.debit(customerId, deviceId, { reportId, didWork });
       audit({ event: 'ticket_debited', deviceId, customerId, charged: spent.charged, balance: spent.balance });

@@ -42,9 +42,22 @@ const NEEDS_JUDGEMENT = /\b(virus|malware|ransom|infect|hack|breach|phish|trojan
  * consented PowerShell and screenshot reading are the two places where a
  * weaker answer has real consequences.
  */
-function pickModel({ ticket = '', fullItSupport = false, hasImages = false, isFollowUp = false }) {
-  if (fullItSupport || hasImages || isFollowUp) return MODEL;
+function pickModel({ ticket = '', fullItSupport = false, hasImages = false,
+                    isFollowUp = false, conversationModel = null }) {
+  if (fullItSupport || hasImages) return MODEL;
   const text = String(ticket);
+
+  // A follow-up is judged on its own words, but can only ever move UP to the
+  // better model — never down. Sending every follow-up to Opus (the first
+  // version of this) was safe but expensive: a conversation is billed as one
+  // ticket, so "what should I check next?" on a printer problem was costing
+  // seven times the opening question for no extra revenue and no extra
+  // difficulty.
+  if (isFollowUp && conversationModel) {
+    if (conversationModel === MODEL) return MODEL;          // already escalated, stay
+    return NEEDS_JUDGEMENT.test(text) ? MODEL : conversationModel;
+  }
+
   if (NEEDS_JUDGEMENT.test(text)) return MODEL;
   if (ROUTINE.test(text)) return ROUTINE_MODEL;
   return MODEL;   // unrecognised symptom — don't gamble, use the better model
@@ -430,11 +443,12 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
                           priorMessages = null, images = [],
                           resolveCloudTool = null,
                           fullItSupport = false,
+                          model = null,
                           onStep = () => {}, onUpdate = () => {} }) {
   const client = new Anthropic({ apiKey });
   // Route before anything else — the choice drives cost, cache behaviour and
   // the price we can defend for a single ticket.
-  const chosenModel = pickModel({
+  const chosenModel = model || pickModel({
     ticket,
     fullItSupport,
     hasImages: Array.isArray(images) && images.length > 0,

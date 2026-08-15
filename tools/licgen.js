@@ -27,6 +27,12 @@ const PLANS = ['trial', 'incident', 'standard', 'pro', 'full'];
 // lying.
 const DEFAULT_DAYS = { trial: 15, incident: 1 };
 
+// The 24-Hour Pass is a day's licence PLUS a small ticket allowance, so it runs
+// through the same ledger as everything else instead of being an unmetered
+// special case. Five separate problems in a day is generous — a follow-up
+// question does not spend a ticket, only a new conversation does.
+const PASS_TICKETS = 5;
+
 function init() {
   if (fs.existsSync(PRIV)) {
     console.error(`Refusing to overwrite the existing signing key at ${PRIV}.`);
@@ -92,6 +98,23 @@ function issue() {
   console.log(`Plan     : ${plan}   Seats: ${seats}`);
   console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
   if (devices.length) console.log(`Devices  : ${devices.join(', ')}`);
+
+  // Credit the pass's tickets at issue time so it works the moment the key is
+  // pasted in, rather than depending on someone remembering a second step.
+  if (plan === 'incident') {
+    if (payload.customerId) {
+      try {
+        const ledger = require('../orchestrator/ledger');
+        const out = ledger.credit(payload.customerId, PASS_TICKETS, { note: '24-hour pass' });
+        console.log(`Tickets  : ${PASS_TICKETS} credited to ${payload.customerId} (balance ${out.balance})`);
+      } catch (e) {
+        console.error(`WARNING: could not credit pass tickets: ${e.message}`);
+      }
+    } else {
+      console.error('WARNING: no --customer-id given, so the pass tickets were NOT credited and');
+      console.error('         this pass will run unmetered. Re-issue with --customer-id <org-slug>.');
+    }
+  }
   console.log('');
   console.log('Licence key — paste this into the customer\'s Resolve window:');
   console.log('');
