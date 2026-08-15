@@ -51,6 +51,7 @@
   </div>
 
   <div id="view" hidden>
+    <div id="tickets"></div>
     <div class="totals" id="totals"></div>
     <div class="card">
       <h2 style="margin:0 0 4px;font-size:16px">Per PC</h2>
@@ -83,9 +84,73 @@ async function load(org, token) {
   return r.json();
 }
 
+function renderTickets(tk) {
+  if (!tk || !tk.metered) { $('tickets').innerHTML = ''; return; }
+  const low = tk.balance <= 0;
+  const warn = !low && tk.balance <= 5;
+  const colour = low ? '#b3261e' : warn ? 'var(--amber)' : 'var(--green)';
+  const note = low
+    ? `Out of tickets — using the grace allowance (${tk.overdraftLimit} max). Top up to avoid interruption.`
+    : warn ? 'Running low — worth topping up soon.' : '';
+
+  $('tickets').innerHTML = `
+    <div class="card">
+      <h2 style="margin:0 0 4px;font-size:16px">Support tickets</h2>
+      <p class="muted" style="margin:0 0 14px">One ticket is one AI support session. Unused tickets carry over.</p>
+      <div class="totals" style="margin-bottom:${note ? '12px' : '0'}">
+        <div class="stat"><b style="color:${colour}">${tk.balance}</b><span>Remaining</span></div>
+        <div class="stat"><b>${tk.usedThisPeriod}</b><span>Used this month</span></div>
+        <div class="stat"><b>${tk.purchased}</b><span>Bought (total)</span></div>
+        <div class="stat"><b>${tk.used}</b><span>Used (total)</span></div>
+      </div>
+      ${note ? `<p style="margin:0;color:${colour};font-size:13px;font-weight:600">${note}</p>` : ''}
+    </div>
+    <div class="card">
+      <h2 style="margin:0 0 4px;font-size:16px">Who is using them</h2>
+      <p class="muted" style="margin:0 0 12px">This month, highest first. Set a monthly cap on any PC to stop one machine draining the pool.</p>
+      <div class="scroll"><table id="consumers"></table></div>
+    </div>`;
+
+  const rows = (tk.perDeviceNamed || []);
+  $('consumers').innerHTML =
+    '<tr><th>PC</th><th>Group</th><th>Used this month</th><th>Monthly cap</th><th></th></tr>' +
+    (rows.length ? rows.map((r) => `<tr>
+      <td><strong>${esc(r.hostname)}</strong></td>
+      <td>${r.group ? esc(r.group) : '<span class="muted">—</span>'}</td>
+      <td>${r.used}</td>
+      <td>${r.quota == null ? '<span class="muted">no cap</span>' : r.quota}</td>
+      <td><input data-dev="${esc(r.deviceId)}" class="cap" type="number" min="0" placeholder="set cap"
+             style="width:110px;padding:6px 8px"></td>
+    </tr>`).join('') : '<tr><td colspan="5" class="muted">No tickets used yet this month.</td></tr>');
+
+  document.querySelectorAll('input.cap').forEach((inp) => {
+    inp.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter') return;
+      const v = inp.value.trim();
+      await post({ action: 'setQuota', target: inp.dataset.dev,
+                   ticketsPerMonth: v === '' ? null : Number(v) });
+      refresh();
+    });
+  });
+}
+
+async function post(body) {
+  const r = await fetch(`/api/console?customerId=${encodeURIComponent(S.getItem('org'))}`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + S.getItem('tok'), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) alert((await r.json().catch(() => ({}))).error || 'Could not save that.');
+}
+
+function refresh() {
+  load(S.getItem('org'), S.getItem('tok')).then(render).catch(() => {});
+}
+
 function render(d) {
   $('login').hidden = true;
   $('view').hidden = false;
+  renderTickets(d.tickets);
 
   const t = d.totals;
   $('totals').innerHTML = [

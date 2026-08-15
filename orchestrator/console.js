@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const ledger = require('./ledger');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
@@ -99,9 +100,25 @@ function orgView(customerId) {
     if (s.flags.some((f) => f.severity === 'review')) byDevice[s.deviceId].flagged += 1;
   }
 
+  // Ticket balance and quotas. Shown alongside usage because "how many tickets
+  // are left" and "who is spending them" are the same question to an admin.
+  const tickets = ledger.summary(customerId);
+  if (tickets.metered) {
+    // Attach the hostname to per-device consumption — an admin thinks in PCs,
+    // not device ids.
+    tickets.perDeviceNamed = Object.entries(tickets.perDeviceThisPeriod || {}).map(([id, n]) => ({
+      deviceId: id,
+      hostname: (devices[id] && devices[id].hostname) || 'unknown',
+      used: n,
+      group: tickets.groups[id] || null,
+      quota: tickets.quotas[id] != null ? tickets.quotas[id] : null,
+    })).sort((a, b) => b.used - a.used);
+  }
+
   return {
     customerId,
     generatedAt: new Date().toISOString(),
+    tickets,
     totals: {
       devices: deviceIds.size,
       sessions: sessions.length,

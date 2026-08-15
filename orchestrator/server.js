@@ -651,9 +651,60 @@ const httpServer = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       return res.end(fs.readFileSync(CONSOLE_FILE));
     }
+    // Quota controls belong to the CUSTOMER's admin — capping their own people
+    // is their business. Selling tickets is not: a top-up route reachable with
+    // an org token would let a customer credit themselves, so that lives on the
+    // Alpha Web dashboard token instead (below).
+    if (route === '/api/console' && req.method === 'POST') {
+      try {
+        const body = await readJsonBody(req);
+        if (body.action === 'setQuota') {
+          const quotas = ledger.setQuota(customerId, String(body.target || ''),
+            body.ticketsPerMonth === null ? null : body.ticketsPerMonth);
+          audit({ event: 'console_quota_set', customerId, target: body.target, value: body.ticketsPerMonth });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true, quotas }));
+        }
+        if (body.action === 'setGroup') {
+          const groups = ledger.setGroup(customerId, String(body.deviceId || ''), body.group || null);
+          audit({ event: 'console_group_set', customerId, deviceId: body.deviceId, group: body.group });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          return res.end(JSON.stringify({ ok: true, groups }));
+        }
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'unknown action' }));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: e.message }));
+      }
+    }
+
     audit({ event: 'console_viewed', customerId });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(customerConsole.orgView(customerId)));
+  }
+
+  // Selling tickets. Alpha Web's dashboard token only — never the org token.
+  if (route === '/api/admin/tickets' && req.method === 'POST') {
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!DASHBOARD_TOKEN || !tokenOk(supplied)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    try {
+      const body = await readJsonBody(req);
+      const cid = orgLibrary.slugify(body.customerId || '');
+      if (!cid) throw new Error('customerId required');
+      const out = ledger.credit(cid, body.tickets, { note: body.note || 'top-up' });
+      audit({ event: 'tickets_sold', customerId: cid, tickets: body.tickets, balance: out.balance });
+      log(`sold ${body.tickets} ticket(s) to ${cid} — balance now ${out.balance}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
   }
 
   if (route === '/api/admin/bootstrap-token' && req.method === 'POST') {
