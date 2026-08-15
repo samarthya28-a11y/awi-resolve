@@ -125,6 +125,9 @@ function buildReport(ticket) {
       checksRun: checks.length,
       actionsNotTaken: notDone.length,
     },
+    // What this session cost to run. Stored so unit economics can be computed
+    // from history rather than re-measured by hand; `unit-economics.js` reads it.
+    usage: ticket.usage || null,
     // Sections of the AI's own closing summary
     summary: {
       diagnosis: extractSection(ticket.report || '', 'DIAGNOSIS'),

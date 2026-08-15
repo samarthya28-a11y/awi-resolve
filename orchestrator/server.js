@@ -417,6 +417,10 @@ async function runTicket(ws, deviceId, ticket) {
       generatedAt: new Date().toISOString(), deviceId, model: MODEL, ticket,
       durationSec, steps: result.steps, toolCalls: result.toolCalls,
       customerDeclined: declined, escalated, report: result.report,
+      // Token spend for this ticket. Kept in the stored report, not just the
+      // log, because unit economics have to be computable from history — and
+      // the cost of a support session is the number the price list rests on.
+      usage: result.usage || null,
     };
     fs.writeFileSync(DIAGNOSIS_FILE, JSON.stringify(out, null, 2));  // latest, for convenience
 
