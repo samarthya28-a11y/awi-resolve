@@ -88,8 +88,23 @@ function startUiServer() {
   wss.on('connection', (client) => {
     uiClients.add(client);
     client.send(JSON.stringify({ type: 'hello', hostname: os.hostname() }));
+    // Ask once, on the first window the customer opens. Until they answer,
+    // nothing is uploaded (see sendPostureReport).
+    const consent = readConsent();
+    if (!consent.decided) client.send(JSON.stringify({ type: 'telemetry_ask' }));
     client.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      if (m.type === 'telemetry_choice') {
+        const rec = writeConsent(m.allowed);
+        log(`customer ${rec.allowed ? 'allowed' : 'declined'} health reporting`);
+        toUI({ type: 'telemetry_set', allowed: rec.allowed });
+        // Start reporting straight away if they agreed; if they declined,
+        // sendPostureReport already refuses, so there is nothing to stop.
+        if (rec.allowed && orchWs && orchWs.readyState === WebSocket.OPEN) {
+          sendPostureReport(orchWs).catch(() => {});
+        }
+        return;
+      }
       if (m.type === 'open_ticket') {
         if (orchWs && orchWs.readyState === WebSocket.OPEN) {
           toUI({ type: 'status', text: 'Connecting you to the AI technician…' });
@@ -229,7 +244,36 @@ async function handleToolCall(ws, msg) {
 // machine, and it never includes file contents or personal data.
 const POSTURE_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6 hours
 
+// Telemetry consent. Reporting is disclosed in the support window and can be
+// turned off there; the decision is remembered per machine.
+//
+// Deliberately defaults to OFF until the customer has actually been shown the
+// disclosure. A health summary that uploads before anyone has been told is the
+// thing a security-minded buyer holds against a security product, and Resolve's
+// whole pitch is that nothing happens without the customer knowing.
+const CONSENT_FILE = path.join(__dirname, 'data', 'telemetry-consent.json');
+
+function readConsent() {
+  try { return JSON.parse(fs.readFileSync(CONSENT_FILE, 'utf8')); }
+  catch { return { decided: false, allowed: false }; }
+}
+
+function writeConsent(allowed) {
+  const record = { decided: true, allowed: !!allowed, at: new Date().toISOString() };
+  try {
+    fs.mkdirSync(path.dirname(CONSENT_FILE), { recursive: true });
+    fs.writeFileSync(CONSENT_FILE, JSON.stringify(record, null, 2));
+  } catch (e) { log(`could not save telemetry choice: ${e.message}`); }
+  return record;
+}
+
 async function sendPostureReport(ws) {
+  const consent = readConsent();
+  if (!consent.allowed) {
+    log(consent.decided ? 'posture reporting is off (customer declined)'
+                        : 'posture reporting held — customer has not been asked yet');
+    return;
+  }
   try {
     const [posture, snapshot, devices, threats, admins, updates] = await Promise.all([
       TOOLS.get_security_posture.run({}).catch(() => null),

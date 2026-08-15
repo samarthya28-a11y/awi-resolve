@@ -154,6 +154,12 @@ function handle(m) {
     case 'ai_message': clearStatus(); el('msg ai', m.text); break;
     case 'action': { clearStatus(); const d = el('action'); d.innerHTML = '<span class="tick">✓</span> ' + m.text; break; }
     case 'consent': clearStatus(); renderConsent(m); break;
+    case 'telemetry_ask': renderTelemetryAsk(); break;
+    case 'telemetry_set':
+      el('msg sys', m.allowed
+        ? 'Health reporting is on. You can turn it off any time — just ask.'
+        : 'Health reporting is off. Nothing about this PC is sent to Alpha Web.');
+      break;
     case 'summary': clearStatus(); renderSummary(m.report); break;
     case 'done': clearStatus(); setBusy(false); break;
   }
@@ -164,6 +170,26 @@ function renderConsent(m) {
   c.querySelector('.q').textContent = m.prompt;
   c.querySelector('.ok').onclick = () => answer(c, m.consentId, 'accepted');
   c.querySelector('.no').onclick = () => answer(c, m.consentId, 'declined');
+}
+// Shown once, before anything about this PC leaves it. Says plainly what is
+// sent and what is not — a vague "we collect usage data" is the wording that
+// makes people distrust a security product, and specifics cost nothing.
+function renderTelemetryAsk() {
+  const c = el('consent');
+  c.innerHTML =
+    '<div class="q"><strong>Before we start — may Resolve send Alpha Web a health summary of this PC?</strong><br><br>'
+    + '<strong>What is sent:</strong> this PC\'s name, Windows version, whether antivirus and firewall are on, '
+    + 'how many security detections and pending updates there are, and free disk and memory. '
+    + 'It helps us spot problems early and improve the product.<br><br>'
+    + '<strong>What is never sent:</strong> your files, emails, documents, passwords, or anything you type here.'
+    + '<br><br>Resolve works exactly the same either way. You can change your mind at any time.</div>'
+    + '<div class="btns"><button class="ok">Yes, that\'s fine</button><button class="no">No thanks</button></div>';
+  c.querySelector('.ok').onclick = () => telemetryAnswer(c, true);
+  c.querySelector('.no').onclick = () => telemetryAnswer(c, false);
+}
+function telemetryAnswer(c, allowed) {
+  ws.send(JSON.stringify({ type: 'telemetry_choice', allowed }));
+  c.classList.add('answered');
 }
 function answer(c, consentId, decision) {
   ws.send(JSON.stringify({ type: 'consent_response', consentId, decision }));
