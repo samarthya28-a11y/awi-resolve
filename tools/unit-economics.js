@@ -166,15 +166,31 @@ if (T != null && E != null) {
   const entry = PLANS[0];
   const ceiling = entry.inrPerMonth / (1 + TARGET_MARKUP / 100);
   const allowedHuman = ceiling - apiPart - INFRA_PER_PC;
-  const maxE = (T > 0 && HUMAN_COST_INR > 0) ? allowedHuman / (T * HUMAN_COST_INR) : null;
   console.log('');
   console.log(`=== To clear ${TARGET_MARKUP}% on ${entry.name} (₹${entry.inrPerMonth}) ===`);
   console.log(`  cost ceiling           : ${money(ceiling)} per PC per month`);
-  if (maxE == null || maxE < 0) {
-    console.log('  escalation rate needed : not reachable at this ticket rate — reduce tickets or raise price');
-  } else {
-    console.log(`  escalation rate needed : at or below ${pct(Math.min(maxE, 1))}`
+
+  // Answer the question that is actually binding. Escalation rate only matters
+  // while escalations cost something; with no human backstop the constraint is
+  // the ticket rate instead, and reporting an escalation target there would be
+  // arithmetic on a number that no longer means anything.
+  if (cogs <= ceiling) {
+    console.log(`  status                 : already clear — ${money(ceiling - cogs)} of headroom per PC per month`);
+    if (HUMAN_COST_INR > 0 && T > 0) {
+      const maxE = allowedHuman / (T * HUMAN_COST_INR);
+      console.log(`  escalation headroom    : up to ${pct(Math.min(maxE, 1))} (currently ${pct(E)})`);
+    } else {
+      const maxT = s.avgInrPerTicket > 0 ? (ceiling - INFRA_PER_PC) / s.avgInrPerTicket : null;
+      if (maxT != null) {
+        console.log(`  ticket headroom        : up to ${maxT.toFixed(1)} tickets/PC/month (currently ${T.toFixed(2)})`);
+      }
+    }
+  } else if (HUMAN_COST_INR > 0 && T > 0 && allowedHuman > 0) {
+    console.log(`  escalation rate needed : at or below ${pct(Math.min(allowedHuman / (T * HUMAN_COST_INR), 1))}`
       + `   (currently ${pct(E)})`);
+  } else {
+    console.log('  status                 : over the ceiling on API + infra alone —');
+    console.log('                           the ticket rate is the problem, not escalations');
   }
 }
 

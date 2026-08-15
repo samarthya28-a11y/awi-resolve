@@ -10,6 +10,7 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { diagnose, MODEL, resolveOrchestratorTool } = require('./ai');
 const { loadManuals } = require('./manuals');
+const customerConsole = require('./console');
 const { evaluate: evaluateLicense } = require('./licensing');
 const orgLibrary = require('./org-library');
 
@@ -480,6 +481,7 @@ async function runTicket(ws, deviceId, ticket) {
 // HTTP server for the host's health check + the WebSocket upgrade endpoint.
 const DASHBOARD_FILE = path.join(__dirname, 'ui', 'fleet.html');
 const REPORTS_FILE = path.join(__dirname, 'ui', 'reports.html');
+const CONSOLE_FILE = path.join(__dirname, 'ui', 'console.html');
 const ADMIN_SOFTWARE_FILE = path.join(__dirname, 'ui', 'org-software.html');
 
 // Constant-time-ish token compare
@@ -591,6 +593,34 @@ const httpServer = http.createServer(async (req, res) => {
   }
 
   // Bootstrap helper (dashboard token): create/show an org admin token.
+  // Customer usage console. Same per-org admin token as the software library —
+  // one credential per organisation, not two. Scope comes from the token, never
+  // from the request, so a customer cannot widen their own view.
+  if (route === '/console' || route === '/api/console') {
+    const customerId = orgLibrary.slugify(url.searchParams.get('customerId') || '');
+    const token = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (route === '/console' && !token) {
+      // No token yet: serve the page, which asks for one. Serving the shell
+      // unauthenticated is fine — it contains no data.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(fs.readFileSync(CONSOLE_FILE));
+    }
+    if (!customerId || !orgLibrary.adminTokenOk(customerId, token)) {
+      audit({ event: 'console_denied', customerId: customerId || null });
+      log(`console DENIED for "${customerId}" from ${req.socket.remoteAddress}`);
+      res.writeHead(401, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ error: 'Unauthorised. Check your organisation id and access token.' }));
+    }
+    if (route === '/console') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(fs.readFileSync(CONSOLE_FILE));
+    }
+    audit({ event: 'console_viewed', customerId });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(customerConsole.orgView(customerId)));
+  }
+
   if (route === '/api/admin/bootstrap-token' && req.method === 'POST') {
     if (!DASHBOARD_TOKEN) {
       res.writeHead(404).end('Dashboard disabled');
@@ -717,6 +747,18 @@ wss.on('connection', (ws) => {
       // wrong — but consent-gated fixes and deployment are withheld.
       const lic = evaluateLicense(msg.licenseKey, deviceId);
       deviceLicenses.set(deviceId, lic);
+      // Remember which organisation this PC belongs to. The customer console
+      // scopes on it, and it has to survive a restart — deviceLicenses is only
+      // in memory and only covers currently-connected machines.
+      if (lic.customerId) {
+        try {
+          const all = loadDevices();
+          if (all[deviceId] && all[deviceId].customerId !== lic.customerId) {
+            all[deviceId].customerId = lic.customerId;
+            saveDevices(all);
+          }
+        } catch (e) { log(`could not record org for ${deviceId}: ${e.message}`); }
+      }
       const customerId = orgLibrary.customerIdFromLicense(lic)
         || (msg.customerId ? orgLibrary.slugify(msg.customerId) : null)
         || (loadDevices()[deviceId] && loadDevices()[deviceId].customerId) || null

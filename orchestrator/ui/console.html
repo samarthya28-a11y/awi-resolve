@@ -1,0 +1,135 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Resolve — Usage Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --navy:#0f1e3d; --ink:#1b2436; --muted:#5b6883; --line:#e3e8f0;
+    --bg:#f6f8fb; --card:#fff; --green:#7fa728; --amber:#b5761f; --blue:#1f6fb5;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--navy); color:#fff; padding:18px 24px; }
+  header h1 { margin:0; font-size:18px; font-weight:800; letter-spacing:-.01em; }
+  header p { margin:4px 0 0; font-size:13px; opacity:.75; }
+  main { max-width:1100px; margin:0 auto; padding:24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:20px; margin-bottom:18px; }
+  .totals { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .stat b { display:block; font-size:26px; font-weight:800; color:var(--navy); }
+  .stat span { font-size:12px; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th { text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:8px 10px; border-bottom:1px solid var(--line); }
+  td { padding:10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr:last-child td { border-bottom:0; }
+  .flag { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:99px; margin:1px 3px 1px 0; }
+  .flag.review { background:#fdf3e3; color:var(--amber); }
+  .flag.info { background:#eef4fb; color:var(--blue); }
+  .scroll { overflow-x:auto; }
+  label { display:block; font-size:12px; font-weight:700; color:var(--muted); margin:12px 0 4px; text-transform:uppercase; letter-spacing:.05em; }
+  input { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  button { margin-top:14px; background:var(--navy); color:#fff; border:0; border-radius:8px; padding:11px 18px; font:inherit; font-weight:700; cursor:pointer; }
+  .err { color:#b3261e; font-size:13px; margin-top:10px; }
+  .muted { color:var(--muted); font-size:13px; }
+  .login { max-width:420px; margin:60px auto; }
+</style>
+
+<header>
+  <h1>Resolve — Usage Console</h1>
+  <p>What Resolve has done on your PCs, and anything worth a second look.</p>
+</header>
+
+<main>
+  <div id="login" class="card login">
+    <p class="muted">Sign in with the organisation id and access token Alpha Web issued with your licence.</p>
+    <label for="org">Organisation id</label>
+    <input id="org" placeholder="acme-ltd" autocomplete="off">
+    <label for="tok">Access token</label>
+    <input id="tok" type="password" placeholder="paste your token" autocomplete="off">
+    <button id="go">View usage</button>
+    <div id="err" class="err"></div>
+  </div>
+
+  <div id="view" hidden>
+    <div class="totals" id="totals"></div>
+    <div class="card">
+      <h2 style="margin:0 0 4px;font-size:16px">Per PC</h2>
+      <p class="muted" style="margin:0 0 12px">Sessions and changes on each machine.</p>
+      <div class="scroll"><table id="devices"></table></div>
+    </div>
+    <div class="card">
+      <h2 style="margin:0 0 4px;font-size:16px">Sessions</h2>
+      <p class="muted" style="margin:0 0 12px">Most recent first. Anything tagged for review is shown, not hidden — you decide whether it was appropriate.</p>
+      <div class="scroll"><table id="sessions"></table></div>
+    </div>
+  </div>
+</main>
+
+<script>
+// The token is kept only for this browser tab. Not localStorage: a shared or
+// kiosk PC should not leave an org's access token behind after the tab closes.
+const S = sessionStorage;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
+  { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+async function load(org, token) {
+  const r = await fetch(`/api/console?customerId=${encodeURIComponent(org)}`,
+    { headers: { Authorization: 'Bearer ' + token } });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.error || `Could not load (HTTP ${r.status}).`);
+  }
+  return r.json();
+}
+
+function render(d) {
+  $('login').hidden = true;
+  $('view').hidden = false;
+
+  const t = d.totals;
+  $('totals').innerHTML = [
+    ['PCs', t.devices], ['Sessions', t.sessions], ['Changes made', t.changes],
+    ['Declined by user', t.declined], ['For review', t.flaggedForReview],
+  ].map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
+
+  $('devices').innerHTML =
+    '<tr><th>PC</th><th>Sessions</th><th>Changes</th><th>For review</th></tr>' +
+    (d.devices.length ? d.devices.map((x) => `<tr>
+      <td><strong>${esc(x.hostname)}</strong></td>
+      <td>${x.sessions}</td><td>${x.changes}</td><td>${x.flagged}</td>
+    </tr>`).join('') : '<tr><td colspan="4" class="muted">No activity yet.</td></tr>');
+
+  $('sessions').innerHTML =
+    '<tr><th>When</th><th>PC</th><th>Asked for</th><th>What changed</th><th>Notes</th></tr>' +
+    (d.sessions.length ? d.sessions.map((s) => `<tr>
+      <td class="muted">${esc(new Date(s.at).toLocaleString())}</td>
+      <td>${esc(s.hostname)}</td>
+      <td>${esc(s.request)}</td>
+      <td>${s.changes.length ? s.changes.map(esc).join('<br>') : '<span class="muted">nothing changed</span>'}</td>
+      <td>${s.flags.map((f) => `<span class="flag ${f.kind === 'declined' || f.kind === 'unlicensed' ? 'info' : 'review'}">${esc(f.label)}</span>`).join('')}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="muted">No sessions yet.</td></tr>');
+}
+
+async function go() {
+  const org = $('org').value.trim();
+  const token = $('tok').value.trim();
+  $('err').textContent = '';
+  if (!org || !token) { $('err').textContent = 'Both fields are needed.'; return; }
+  try {
+    const d = await load(org, token);
+    S.setItem('org', org); S.setItem('tok', token);
+    render(d);
+  } catch (e) { $('err').textContent = e.message; }
+}
+
+$('go').onclick = go;
+$('tok').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+
+// Resume within the same tab without retyping.
+if (S.getItem('org') && S.getItem('tok')) {
+  load(S.getItem('org'), S.getItem('tok')).then(render).catch(() => {
+    S.removeItem('org'); S.removeItem('tok');
+  });
+}
+</script>
