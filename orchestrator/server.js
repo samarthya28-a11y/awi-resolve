@@ -21,6 +21,7 @@ const deviceCustomers = new Map();
 const { kbStats } = require('./kb');
 const { recordPosture, fleetView } = require('./fleet');
 const { buildReport, saveReport, listReports, getReport } = require('./report');
+const ledger = require('./ledger');
 
 // The fleet dashboard exposes customer security posture, so it is never open.
 // Set RESOLVE_DASHBOARD_TOKEN to enable it; unset = dashboard disabled entirely.
@@ -379,6 +380,20 @@ async function runTicket(ws, deviceId, ticket) {
       hasImages: images.length > 0,
       isFollowUp,
     });
+    // Prepaid tickets: check before the model runs, so a session that cannot be
+    // paid for never costs anything. Orgs with no ledger are unmetered and pass
+    // straight through — metering must not block anyone it was never set up for.
+    const gate = customerId ? ledger.canOpen(customerId, deviceId) : { allowed: true, metered: false };
+    if (!gate.allowed) {
+      log(`ticket refused for ${customerId}/${deviceId}: out of tickets or over quota`);
+      audit({ event: 'ticket_refused_no_credit', deviceId, customerId });
+      ws.send(JSON.stringify({ type: 'ai_message', text: gate.reason }));
+      ws.send(JSON.stringify({ type: 'done' }));
+      busyDevices.delete(deviceId);
+      return;
+    }
+    if (gate.overdraft) ws.send(JSON.stringify({ type: 'ai_message', text: gate.reason }));
+
     log(`AI technician (${routedModel}) working ticket: "${ticket}"`);
     const progress = (text) => ws.send(JSON.stringify({ type: 'ai_update', text }));
     const result = await diagnose({
@@ -446,6 +461,18 @@ async function runTicket(ws, deviceId, ticket) {
 
     audit({ event: 'ticket_closed', deviceId, reportId, steps: result.steps,
             toolCount: result.toolCalls.length, declined, escalated });
+
+    // Spend the ticket now the work is done. A session that ran no tools and
+    // produced no report gave the customer nothing, so it is recorded but not
+    // billed — a few rupees to avoid an argument we would deserve to lose.
+    if (customerId && gate.metered) {
+      const didWork = result.toolCalls.length > 0 || !!(result.report && result.report.trim());
+      const spent = ledger.debit(customerId, deviceId, { reportId, didWork });
+      audit({ event: 'ticket_debited', deviceId, customerId, charged: spent.charged, balance: spent.balance });
+      log(didWork
+        ? `ticket debited — ${spent.balance} ticket(s) left for ${customerId}`
+        : `ticket NOT billed (session did nothing) — ${spent.balance} left for ${customerId}`);
+    }
 
     if (escalated) {
       // Spec §10: structured handoff for a human technician.
