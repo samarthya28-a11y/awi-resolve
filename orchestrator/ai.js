@@ -14,6 +14,41 @@ const { findManual } = require('./manuals');
 const { searchKb } = require('./kb');
 
 const MODEL = 'claude-opus-4-8';
+
+// ---- Model routing ----------------------------------------------------------
+// Most tier-1 tickets are a printer queue, a stopped service or a full disk —
+// work Haiku handles perfectly well at a fifth of the price. Reserving Opus for
+// the tickets that actually need it is the difference between a ticket costing
+// ~Rs 16 and ~Rs 3, which is what makes a per-ticket price sellable.
+//
+// The routing is deliberately CONSERVATIVE: anything touching security, an
+// infection, PowerShell, a screenshot, or a continued conversation goes to
+// Opus. A wrong cheap answer on a security ticket costs far more than the
+// tokens saved, so the tie-break is always "use the better model".
+const MODELS = {
+  'claude-opus-4-8': { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 },
+  'claude-haiku-4-5': { input: 1, output: 5, cacheWrite: 1.25, cacheRead: 0.1 },
+};
+const ROUTINE_MODEL = 'claude-haiku-4-5';
+
+// Symptoms that are routine to diagnose and fix with the Tier-0/Tier-1 toolset.
+const ROUTINE = /\b(print|printer|spooler|queue|paper|toner|ink|scan|dns|internet|wi-?fi|wifi|network drive|mapped drive|slow|sluggish|freez|disk space|low on space|full disk|temp file|start ?up|boot|restart|reboot|explorer|taskbar|sound|audio|bluetooth|mouse|keyboard|touchpad|display|monitor|resolution|update|outlook|email|excel|word|office|teams|zoom|gespage)\b/i;
+
+// Anything here is never routed to the cheaper model.
+const NEEDS_JUDGEMENT = /\b(virus|malware|ransom|infect|hack|breach|phish|trojan|quarantin|encrypt|password|credential|admin rights|permission|firewall|defender|antivirus|security|suspicious|powershell|script|registry|install|licen[cs]e|activation|domain|group policy|vpn|certificate|server|backup|data loss|corrupt|blue screen|bsod)\b/i;
+
+/**
+ * Pick the model for a ticket. `fullItSupport` and images always mean Opus:
+ * consented PowerShell and screenshot reading are the two places where a
+ * weaker answer has real consequences.
+ */
+function pickModel({ ticket = '', fullItSupport = false, hasImages = false, isFollowUp = false }) {
+  if (fullItSupport || hasImages || isFollowUp) return MODEL;
+  const text = String(ticket);
+  if (NEEDS_JUDGEMENT.test(text)) return MODEL;
+  if (ROUTINE.test(text)) return ROUTINE_MODEL;
+  return MODEL;   // unrecognised symptom — don't gamble, use the better model
+}
 const MAX_STEPS = 16;
 const MAX_STEPS_FULL = 28;
 const API_CALL_TIMEOUT_MS = 180000;
@@ -355,10 +390,16 @@ function moveConversationCachePoint(messages) {
 // unmeasured saving is one nobody can defend in a price review — so every
 // ticket reports what it actually cost. Rates are Claude Opus 4.8: $5/M input,
 // $25/M output, cache writes 1.25x input, cache reads 0.1x.
-const RATE_USD_PER_MTOK = { input: 5, output: 25, cacheWrite: 6.25, cacheRead: 0.5 };
+// Rates follow the model the ticket actually ran on — with routing in play, a
+// fixed Opus rate would over-report the cost of every routine ticket and make
+// per-ticket pricing wrong in the safe direction, which is still wrong.
 let usageTotals = null;
+let usageModel = MODEL;
 
-function resetUsage() { usageTotals = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 }; }
+function resetUsage(model) {
+  usageModel = MODELS[model] ? model : MODEL;
+  usageTotals = { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
+}
 
 function recordCacheUsage(u) {
   if (!u || !usageTotals) return;
@@ -371,14 +412,16 @@ function recordCacheUsage(u) {
 function usageSummary() {
   if (!usageTotals) return null;
   const t = usageTotals;
-  const usd = (t.input * RATE_USD_PER_MTOK.input + t.output * RATE_USD_PER_MTOK.output
-             + t.cacheWrite * RATE_USD_PER_MTOK.cacheWrite + t.cacheRead * RATE_USD_PER_MTOK.cacheRead) / 1e6;
+  const rate = MODELS[usageModel] || MODELS[MODEL];
+  const usd = (t.input * rate.input + t.output * rate.output
+             + t.cacheWrite * rate.cacheWrite + t.cacheRead * rate.cacheRead) / 1e6;
   // What the same ticket would have cost with no caching: everything we read
   // from cache would instead have been full-price input.
-  const withoutCache = ((t.input + t.cacheWrite + t.cacheRead) * RATE_USD_PER_MTOK.input
-                      + t.output * RATE_USD_PER_MTOK.output) / 1e6;
+  const withoutCache = ((t.input + t.cacheWrite + t.cacheRead) * rate.input
+                      + t.output * rate.output) / 1e6;
   const round = (n) => Math.round(n * 10000) / 10000;
-  return { ...t, estimatedUsd: round(usd), withoutCachingUsd: round(withoutCache),
+  return { ...t, model: usageModel,
+           estimatedUsd: round(usd), withoutCachingUsd: round(withoutCache),
            savedUsd: round(withoutCache - usd) };
 }
 
@@ -389,7 +432,15 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
                           fullItSupport = false,
                           onStep = () => {}, onUpdate = () => {} }) {
   const client = new Anthropic({ apiKey });
-  resetUsage();
+  // Route before anything else — the choice drives cost, cache behaviour and
+  // the price we can defend for a single ticket.
+  const chosenModel = pickModel({
+    ticket,
+    fullItSupport,
+    hasImages: Array.isArray(images) && images.length > 0,
+    isFollowUp: Array.isArray(priorMessages) && priorMessages.length > 0,
+  });
+  resetUsage(chosenModel);
   const sessionTools = toolsForSession(fullItSupport);
   const sessionSystem = systemForSession(fullItSupport);
   const maxSteps = fullItSupport ? MAX_STEPS_FULL : MAX_STEPS;
@@ -443,7 +494,7 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
     try {
       response = await Promise.race([
         client.messages.create({
-          model: MODEL, max_tokens: 4096, system: sessionSystem, tools: sessionTools, messages,
+          model: chosenModel, max_tokens: 4096, system: sessionSystem, tools: sessionTools, messages,
         }),
         new Promise((_, reject) => setTimeout(
           () => reject(new Error(`Claude API timed out after ${API_CALL_TIMEOUT_MS / 1000}s`)),
@@ -560,4 +611,4 @@ function resolveOrchestratorTool(name, input, manuals) {
   return { status: 'error', reason: `unknown orchestrator tool '${name}'` };
 }
 
-module.exports = { diagnose, TOOLS, MODEL, ORCHESTRATOR_TOOLS, resolveOrchestratorTool };
+module.exports = { diagnose, TOOLS, MODEL, MODELS, pickModel, ORCHESTRATOR_TOOLS, resolveOrchestratorTool };

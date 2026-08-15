@@ -8,7 +8,7 @@ const http = require('http');
 const path = require('path');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
-const { diagnose, MODEL, resolveOrchestratorTool } = require('./ai');
+const { diagnose, MODEL, pickModel, resolveOrchestratorTool } = require('./ai');
 const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
 const { evaluate: evaluateLicense } = require('./licensing');
@@ -366,12 +366,20 @@ async function runTicket(ws, deviceId, ticket) {
       snapshot = snap.status === 'ok' ? snap.result : null;
     }
 
-    log(`AI technician (${MODEL}) working ticket: "${ticket}"`);
     const started = Date.now();
     const customerId = deviceCustomers.get(deviceId) || null;
     const lic = deviceLicenses.get(deviceId);
     const fullItSupport = !!(lic && lic.caps && lic.caps.fullSupport
       && orgLibrary.isFullItSupportAllowed(customerId));
+    // Logged AFTER the inputs exist. Must mirror what ai.js will decide, so the
+    // log names the model that actually runs rather than the default constant.
+    const routedModel = pickModel({
+      ticket,
+      fullItSupport,
+      hasImages: images.length > 0,
+      isFollowUp,
+    });
+    log(`AI technician (${routedModel}) working ticket: "${ticket}"`);
     const progress = (text) => ws.send(JSON.stringify({ type: 'ai_update', text }));
     const result = await diagnose({
       apiKey: API_KEY,
