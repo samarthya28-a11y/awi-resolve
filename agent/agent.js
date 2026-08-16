@@ -13,6 +13,7 @@ const crypto = require('crypto');
 const os = require('os');
 const WebSocket = require('ws');
 const { TOOLS } = require('./tools');
+const { selfCheck } = require('./selfcheck');
 
 // Config precedence: env var > config.json (next to the app) > default. The
 // installer writes config.json so the packaged app can point at the cloud
@@ -110,11 +111,20 @@ function startUiServer() {
           toUI({ type: 'status', text: 'Connecting you to the AI technician…' });
           orchWs.send(JSON.stringify({ type: 'open_ticket', text: String(m.text || '').slice(0, 2000) }));
         } else {
-          // The agent retries the service every 3s, so this is nearly always a
-          // cold start rather than a real outage — say so, instead of implying
-          // the customer should give up.
-          toUI({ type: 'status', text: 'Still starting the support service — this takes a few seconds after you sign in. Press "Get help" again in a moment.' });
-          toUI({ type: 'done' });
+          // Offline. Rather than send the customer away, examine the PC with
+          // the read-only tools that run here anyway — and when there is no
+          // internet, the problem very often IS the internet, which is exactly
+          // what this can recognise.
+          toUI({ type: 'status', text: "I can't reach the AI technician right now, so let me check this PC myself…" });
+          selfCheck().then((r) => {
+            toUI({ type: 'selfcheck', result: r });
+            toUI({ type: 'done' });
+            log(`offline self-check ran — ${r.findings.length} finding(s)`);
+          }).catch((e) => {
+            log(`self-check failed: ${e.message}`);
+            toUI({ type: 'status', text: 'Still starting the support service — press "Get help" again in a moment.' });
+            toUI({ type: 'done' });
+          });
         }
       } else if (m.type === 'attach_manual') {
         // Customer-supplied reference document. Forwarded to the AI as untrusted

@@ -154,6 +154,7 @@ function handle(m) {
     case 'ai_message': clearStatus(); el('msg ai', m.text); break;
     case 'action': { clearStatus(); const d = el('action'); d.innerHTML = '<span class="tick">✓</span> ' + m.text; break; }
     case 'consent': clearStatus(); renderConsent(m); break;
+    case 'selfcheck': clearStatus(); renderSelfCheck(m.result); break;
     case 'telemetry_ask': renderTelemetryAsk(); break;
     case 'telemetry_set':
       el('msg sys', m.allowed
@@ -171,6 +172,27 @@ function renderConsent(m) {
   c.querySelector('.ok').onclick = () => answer(c, m.consentId, 'accepted');
   c.querySelector('.no').onclick = () => answer(c, m.consentId, 'declined');
 }
+// Offline findings. Presented as observations with suggestions, never as a
+// verdict — offline this is a short checklist, not the AI technician, and the
+// wording has to keep that distinction visible.
+function renderSelfCheck(r) {
+  const d = el('msg ai');
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  let html = '<strong>Offline check of this PC</strong><br><br>';
+  if (r.findings.length) {
+    for (const f of r.findings) {
+      html += `<div style="margin:0 0 12px">
+        <strong>${esc(f.title)}</strong><br>
+        <span style="opacity:.85">${esc(f.observed)}</span>
+        <ul style="margin:6px 0 0 18px;padding:0">${f.advice.map((a) => `<li>${esc(a)}</li>`).join('')}</ul>
+      </div>`;
+    }
+  }
+  html += `<div style="opacity:.8;font-size:13px">${esc(r.note)}</div>`;
+  d.innerHTML = html;
+}
+
 // Shown once, before anything about this PC leaves it. Says plainly what is
 // sent and what is not — a vague "we collect usage data" is the wording that
 // makes people distrust a security product, and specifics cost nothing.
