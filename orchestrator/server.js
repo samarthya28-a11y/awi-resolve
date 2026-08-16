@@ -18,10 +18,11 @@ const orgLibrary = require('./org-library');
 const deviceLicenses = new Map();
 // deviceId -> customer org id (slug) for the IT-admin software library.
 const deviceCustomers = new Map();
-const { kbStats } = require('./kb');
+const { kbStats, invalidateKb } = require('./kb');
 const { recordPosture, fleetView } = require('./fleet');
 const { buildReport, saveReport, listReports, getReport } = require('./report');
 const ledger = require('./ledger');
+const learning = require('./learning');
 
 // The fleet dashboard exposes customer security posture, so it is never open.
 // Set RESOLVE_DASHBOARD_TOKEN to enable it; unset = dashboard disabled entirely.
@@ -473,6 +474,26 @@ async function runTicket(ws, deviceId, ticket) {
 
     audit({ event: 'ticket_closed', deviceId, reportId, steps: result.steps,
             toolCount: result.toolCalls.length, declined, escalated });
+
+    // Learn the METHOD from a solved ticket, never the answer. Scrubbed of every
+    // customer identifier before it is written, and refused outright if anything
+    // identifying survives — the knowledge base is searched by every customer.
+    try {
+      if (reportId) {
+        const saved = getReport(reportId);
+        const lesson = saved && learning.buildPlaybook(saved, {
+          customer: (lic && lic.customer) || '', customerId: customerId || '',
+        });
+        if (lesson && lesson.playbook) {
+          const w = learning.savePlaybook(lesson.playbook);
+          invalidateKb();
+          log(`learned a playbook for "${lesson.key}" (${w.replaced ? 'updated' : 'new'})`);
+          audit({ event: 'playbook_learned', key: lesson.key, replaced: w.replaced });
+        } else if (lesson && lesson.skipped) {
+          log(`no playbook learned: ${lesson.skipped}`);
+        }
+      }
+    } catch (e) { log(`playbook learning failed: ${e.message}`); }
 
     // Spend the ticket now the work is done. A session that ran no tools and
     // produced no report gave the customer nothing, so it is recorded but not
