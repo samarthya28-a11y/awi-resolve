@@ -59,7 +59,53 @@ function org(all, customerId) {
   return all[customerId];
 }
 
-function balanceOf(o) { return o.purchased - o.used; }
+// Tickets expire 12 months after purchase. Unlimited carry-forward means money
+// taken with the service owed indefinitely, and 2026 prices honoured in 2031 —
+// a liability that only grows. A year is standard for prepaid support blocks
+// and still generous.
+const TICKET_LIFE_MONTHS = 12;
+
+function addMonths(iso, months) {
+  const d = new Date(iso);
+  d.setUTCMonth(d.getUTCMonth() + months);
+  return d.toISOString();
+}
+
+/**
+ * Consume debits against credit batches oldest-expiry-first, so a customer
+ * always spends the tickets closest to expiring. Doing it the other way round
+ * would quietly expire tickets they had already paid for and could have used.
+ */
+function batchesOf(o, now = new Date()) {
+  const nowIso = now.toISOString();
+  const credits = o.entries
+    .filter((e) => e.type === 'credit')
+    .map((e) => ({
+      at: e.at,
+      tickets: e.tickets,
+      expiresAt: e.expiresAt || addMonths(e.at, TICKET_LIFE_MONTHS),
+      remaining: e.tickets,
+    }))
+    .sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
+
+  let toSpend = o.used;
+  for (const b of credits) {
+    const take = Math.min(b.remaining, toSpend);
+    b.remaining -= take;
+    toSpend -= take;
+  }
+  const live = credits.filter((b) => b.expiresAt > nowIso)
+                      .reduce((s, b) => s + b.remaining, 0);
+  const expired = credits.filter((b) => b.expiresAt <= nowIso)
+                         .reduce((s, b) => s + b.remaining, 0);
+  // Anything still unspent after every batch is overdraft (used beyond purchased).
+  return { credits, live, expired, overdraft: toSpend };
+}
+
+function balanceOf(o, now = new Date()) {
+  const b = batchesOf(o, now);
+  return b.live - b.overdraft;
+}
 
 /** Tickets this device (and its group) has used in the current month. */
 function usedThisPeriod(o, deviceId, at = new Date()) {
@@ -143,7 +189,8 @@ function credit(customerId, tickets, { note = '', at = new Date() } = {}) {
   const all = load();
   const o = org(all, customerId);
   o.purchased += n;
-  o.entries.push({ type: 'credit', at: at.toISOString(), period: period(at), tickets: n, note });
+  o.entries.push({ type: 'credit', at: at.toISOString(), period: period(at), tickets: n, note,
+                   expiresAt: addMonths(at.toISOString(), TICKET_LIFE_MONTHS) });
   save(all);
   return { customerId, added: n, balance: balanceOf(o) };
 }
@@ -178,9 +225,17 @@ function summary(customerId, at = new Date()) {
   for (const e of thisPeriod) {
     byDevice[e.deviceId] = (byDevice[e.deviceId] || 0) + e.tickets;
   }
+  const b = batchesOf(o, at);
+  // Next batch about to lapse, so an admin can act before it does rather than
+  // discover it afterwards.
+  const nextExpiry = b.credits.filter((c) => c.remaining > 0 && c.expiresAt > at.toISOString())
+                              .sort((x, y) => x.expiresAt.localeCompare(y.expiresAt))[0] || null;
   return {
     metered: true,
-    balance: balanceOf(o),
+    balance: balanceOf(o, at),
+    expiredTickets: b.expired,
+    ticketLifeMonths: TICKET_LIFE_MONTHS,
+    nextExpiry: nextExpiry ? { tickets: nextExpiry.remaining, on: nextExpiry.expiresAt } : null,
     purchased: o.purchased,
     used: o.used,
     overdraftLimit: OVERDRAFT_TICKETS,

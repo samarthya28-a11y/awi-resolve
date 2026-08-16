@@ -93,6 +93,22 @@ function renderTickets(tk) {
     ? `Out of tickets — using the grace allowance (${tk.overdraftLimit} max). Top up to avoid interruption.`
     : warn ? 'Running low — worth topping up soon.' : '';
 
+  // Expiry has to be visible BEFORE it happens. Finding out afterwards that
+  // paid-for tickets lapsed is the complaint this line exists to prevent.
+  let expiryNote = '';
+  if (tk.nextExpiry) {
+    const on = new Date(tk.nextExpiry.on);
+    const days = Math.ceil((on - new Date()) / 86400000);
+    const soon = days <= 60;
+    expiryNote = `<p style="margin:10px 0 0;font-size:13px;color:${soon ? 'var(--amber)' : 'var(--muted)'}">
+      ${soon ? '<strong>Expiring soon:</strong> ' : ''}${tk.nextExpiry.tickets} ticket(s) lapse on
+      ${on.toLocaleDateString()}${soon ? ` — ${days} day(s) away` : ''}.
+      Tickets are valid ${tk.ticketLifeMonths} months from purchase and are always spent oldest-first.</p>`;
+  }
+  if (tk.expiredTickets > 0) {
+    expiryNote += `<p style="margin:6px 0 0;font-size:13px;color:var(--muted)">${tk.expiredTickets} ticket(s) have expired unused.</p>`;
+  }
+
   $('tickets').innerHTML = `
     <div class="card">
       <h2 style="margin:0 0 4px;font-size:16px">Support tickets</h2>

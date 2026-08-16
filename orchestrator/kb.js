@@ -109,4 +109,8 @@ function kbStats() {
   return { documents: byDoc.size, chunks: idx.n };
 }
 
-module.exports = { searchKb, kbStats, loadKb };
+// Learned playbooks are written at runtime, so the cached index has to be
+// droppable — otherwise a lesson from this morning is invisible until restart.
+function invalidateKb() { INDEX = null; }
+
+module.exports = { searchKb, kbStats, loadKb, invalidateKb };
