@@ -165,10 +165,32 @@ function refresh() {
   load(S.getItem('org'), S.getItem('tok')).then(render).catch(() => {});
 }
 
+// Seats are advisory — nothing is switched off — so this is stated as a fact to
+// act on, not a warning that something is broken. A customer discovering they
+// are over should feel informed, not threatened.
+function renderSeats(s) {
+  if (!s || s.seats == null) return '';
+  if (s.withinLicence) {
+    return `<p class="muted" style="margin:0">Using <strong>${s.inUse}</strong> of
+      <strong>${s.seats}</strong> licensed PCs.</p>`;
+  }
+  return `<p style="margin:0;color:var(--amber);font-size:14px">
+    <strong>Using ${s.inUse} PCs on a ${s.seats}-seat licence</strong> — ${s.over} over.
+    Nothing has been switched off and no PC will be. Talk to Alpha Web when convenient
+    to bring the licence in line.</p>`;
+}
+
 function render(d) {
   $('login').hidden = true;
   $('view').hidden = false;
+  const seatHtml = renderSeats(d.seats);
   renderTickets(d.tickets);
+  if (seatHtml) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<h2 style="margin:0 0 8px;font-size:16px">Licensed PCs</h2>${seatHtml}`;
+    $('tickets').appendChild(card);
+  }
 
   const t = d.totals;
   $('totals').innerHTML = [

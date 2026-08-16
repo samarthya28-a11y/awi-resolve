@@ -18,6 +18,8 @@ const orgLibrary = require('./org-library');
 const deviceLicenses = new Map();
 // deviceId -> customer org id (slug) for the IT-admin software library.
 const deviceCustomers = new Map();
+// customerId -> seats sold on that org's licence, for advisory seat reporting.
+const orgSeats = new Map();
 const { kbStats, invalidateKb } = require('./kb');
 const { recordPosture, fleetView } = require('./fleet');
 const { buildReport, saveReport, listReports, getReport } = require('./report');
@@ -714,7 +716,7 @@ const httpServer = http.createServer(async (req, res) => {
 
     audit({ event: 'console_viewed', customerId });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify(customerConsole.orgView(customerId)));
+    return res.end(JSON.stringify(customerConsole.orgView(customerId, orgSeats.get(customerId) || null)));
   }
 
   // Selling tickets. Alpha Web's dashboard token only — never the org token.
@@ -891,6 +893,20 @@ wss.on('connection', (ws) => {
         }
       }
       audit({ event: 'license_checked', deviceId, plan: lic.plan, valid: lic.valid, reason: lic.reason, customerId });
+      if (lic.customerId && lic.seats) {
+        orgSeats.set(lic.customerId, lic.seats);
+        // Advisory only: nothing is switched off. But an org that has quietly
+        // outgrown its licence is revenue Alpha Web cannot see unless it is
+        // said out loud, so it goes in the log and the audit trail on every
+        // enrollment.
+        const use = customerConsole.seatUsage(lic.customerId, lic.seats);
+        if (!use.withinLicence) {
+          log(`SEATS: ${lic.customerId} is using ${use.inUse} PCs on a ${use.seats}-seat licence `
+            + `(${use.over} over) — nothing blocked, renewal conversation`);
+          audit({ event: 'seats_exceeded', customerId: lic.customerId,
+                  inUse: use.inUse, seats: use.seats, over: use.over });
+        }
+      }
       if (lic.valid) {
         const left = lic.daysLeft != null ? `, ${lic.daysLeft} day(s) left` : '';
         log(`licence OK — ${lic.customer} / ${lic.plan}${left}${customerId ? ` [org ${customerId}]` : ''}`);

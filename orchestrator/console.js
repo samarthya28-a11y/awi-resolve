@@ -22,6 +22,28 @@ function loadDevices() {
   try { return JSON.parse(fs.readFileSync(DEVICES_FILE, 'utf8')); } catch { return {}; }
 }
 
+/**
+ * Seat usage for an org: how many PCs are actually enrolled against a licence
+ * sold for N seats.
+ *
+ * Deliberately ADVISORY. Nothing is switched off for being over seats — a
+ * machine that is genuinely broken is the worst possible thing to disable over
+ * a billing discrepancy, and a customer who has quietly outgrown their licence
+ * is a renewal conversation, not an incident. It is surfaced instead: the
+ * customer sees it in their console, and Alpha Web sees it in the audit log.
+ */
+function seatUsage(customerId, licensedSeats = null) {
+  const devices = devicesForOrg(customerId);
+  const inUse = Object.keys(devices).length;
+  const seats = Number.isFinite(licensedSeats) ? licensedSeats : null;
+  return {
+    inUse,
+    seats,
+    over: seats != null ? Math.max(0, inUse - seats) : 0,
+    withinLicence: seats == null ? true : inUse <= seats,
+  };
+}
+
 /** Device ids belonging to this org. The only source of scope. */
 function devicesForOrg(customerId) {
   const all = loadDevices();
@@ -69,7 +91,7 @@ function flagsFor(report) {
  * `customerId` is trusted only because the caller has already proven the org
  * admin token for it.
  */
-function orgView(customerId) {
+function orgView(customerId, licensedSeats = null) {
   const devices = devicesForOrg(customerId);
   const deviceIds = new Set(Object.keys(devices));
 
@@ -118,6 +140,7 @@ function orgView(customerId) {
   return {
     customerId,
     generatedAt: new Date().toISOString(),
+    seats: seatUsage(customerId, licensedSeats),
     tickets,
     totals: {
       devices: deviceIds.size,
@@ -131,4 +154,4 @@ function orgView(customerId) {
   };
 }
 
-module.exports = { orgView, devicesForOrg };
+module.exports = { orgView, devicesForOrg, seatUsage };
