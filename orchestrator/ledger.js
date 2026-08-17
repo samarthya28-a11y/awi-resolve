@@ -59,6 +59,34 @@ function org(all, customerId) {
   return all[customerId];
 }
 
+// ---- managed service providers ---------------------------------------------
+// An MSP is one Alpha Web customer with many client sites. Their org id is
+// hierarchical — "acme-msp:bright-dental" — where everything before the colon
+// is the MSP and everything after is that MSP's client.
+//
+// The split that matters commercially: tickets are POOLED AT THE MSP, because
+// that is who buys them, but every debit is ATTRIBUTED TO THE CLIENT, because
+// that is who the MSP needs to bill and cap. One pool, per-client visibility.
+const ORG_SEPARATOR = ':';
+
+function parentOf(customerId) {
+  const i = String(customerId || '').indexOf(ORG_SEPARATOR);
+  return i > 0 ? customerId.slice(0, i) : null;
+}
+
+/** Which org actually holds the tickets for this one. */
+function billingOrg(all, customerId) {
+  const parent = parentOf(customerId);
+  // Only route to the parent if the parent really has a ledger — an MSP that
+  // has not bought anything must not silently swallow a client's own balance.
+  if (parent && all[parent]) return parent;
+  return customerId;
+}
+
+function isChildOf(customerId, parent) {
+  return String(customerId || '').startsWith(parent + ORG_SEPARATOR);
+}
+
 // Tickets expire 12 months after purchase. Unlimited carry-forward means money
 // taken with the service owed indefinitely, and 2026 prices honoured in 2031 —
 // a liability that only grows. A year is standard for prepaid support blocks
@@ -127,14 +155,28 @@ function usedThisPeriod(o, deviceId, at = new Date()) {
  */
 function canOpen(customerId, deviceId, at = new Date()) {
   const all = load();
-  const o = all[customerId];
+  const payer = billingOrg(all, customerId);
+  const o = all[payer];
   // No ledger for this org yet = not on prepaid tickets (e.g. a plain
   // subscription or a trial). Metering must never block someone it was never
   // configured for.
   if (!o) return { allowed: true, metered: false };
 
   const bal = balanceOf(o);
+  // Quotas are read from the paying org's record, where an MSP sets caps for
+  // each of its clients — the whole point is that one client cannot drain the
+  // shared pool.
   const used = usedThisPeriod(o, deviceId, at);
+  const clientQuota = payer !== customerId ? o.quotas[customerId] : null;
+  if (clientQuota != null) {
+    const spentByClient = o.entries.filter(
+      (e) => e.type === 'debit' && e.period === period(at) && e.forOrg === customerId
+    ).reduce((n, e) => n + e.tickets, 0);
+    if (spentByClient >= clientQuota) {
+      return { allowed: false, metered: true, reason:
+        `This site has used its ${clientQuota} support ticket(s) for this month. Your IT provider can raise the limit.` };
+    }
+  }
 
   const deviceQuota = o.quotas[deviceId];
   if (deviceQuota != null && used.device >= deviceQuota) {
@@ -168,16 +210,21 @@ function canOpen(customerId, deviceId, at = new Date()) {
  */
 function debit(customerId, deviceId, { reportId = null, didWork = true, at = new Date() } = {}) {
   const all = load();
-  if (!all[customerId]) return { metered: false };
-  const o = org(all, customerId);
+  const payer = billingOrg(all, customerId);
+  if (!all[payer]) return { metered: false };
+  const o = org(all, payer);
+  // forOrg records WHICH client the ticket was spent for, even though the MSP
+  // paid. Without it an MSP could see a balance falling with no idea whose
+  // site to bill.
+  const forOrg = customerId;
   if (!didWork) {
-    o.entries.push({ type: 'skipped', at: at.toISOString(), period: period(at), deviceId, reportId, tickets: 0,
+    o.entries.push({ type: 'skipped', at: at.toISOString(), period: period(at), deviceId, forOrg, reportId, tickets: 0,
                      note: 'session did nothing — not billed' });
     save(all);
     return { metered: true, charged: 0, balance: balanceOf(o) };
   }
   o.used += 1;
-  o.entries.push({ type: 'debit', at: at.toISOString(), period: period(at), deviceId, reportId, tickets: 1 });
+  o.entries.push({ type: 'debit', at: at.toISOString(), period: period(at), deviceId, forOrg, reportId, tickets: 1 });
   save(all);
   return { metered: true, charged: 1, balance: balanceOf(o) };
 }
@@ -250,5 +297,6 @@ function summary(customerId, at = new Date()) {
 
 module.exports = {
   canOpen, debit, credit, setQuota, setGroup, summary,
+  parentOf, billingOrg, isChildOf, ORG_SEPARATOR,
   balanceOf, period, OVERDRAFT_TICKETS,
 };

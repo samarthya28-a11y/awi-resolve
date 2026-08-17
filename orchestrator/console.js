@@ -44,14 +44,39 @@ function seatUsage(customerId, licensedSeats = null) {
   };
 }
 
-/** Device ids belonging to this org. The only source of scope. */
+/**
+ * Device ids belonging to this org. The only source of scope.
+ *
+ * An MSP ("acme-msp") also sees every client beneath it
+ * ("acme-msp:bright-dental"), because that is the whole point of the account.
+ * A client sees ONLY itself — never a sibling, and never up into the MSP. The
+ * prefix test is anchored with the separator so "acme-msp-two" is not treated
+ * as a child of "acme-msp".
+ */
 function devicesForOrg(customerId) {
   const all = loadDevices();
   const out = {};
+  const childPrefix = customerId + ledger.ORG_SEPARATOR;
   for (const [id, d] of Object.entries(all)) {
-    if (d && d.customerId === customerId) out[id] = d;
+    if (!d || !d.customerId) continue;
+    if (d.customerId === customerId || d.customerId.startsWith(childPrefix)) out[id] = d;
   }
   return out;
+}
+
+/** Per-client breakdown, for an MSP looking at its whole book. */
+function clientBreakdown(customerId) {
+  const devices = devicesForOrg(customerId);
+  const childPrefix = customerId + ledger.ORG_SEPARATOR;
+  const byClient = {};
+  for (const d of Object.values(devices)) {
+    if (!d.customerId.startsWith(childPrefix)) continue;
+    const name = d.customerId.slice(childPrefix.length);
+    byClient[name] = (byClient[name] || 0) + 1;
+  }
+  return Object.entries(byClient)
+    .map(([client, pcs]) => ({ client, pcs }))
+    .sort((a, b) => b.pcs - a.pcs);
 }
 
 function loadReports() {
@@ -137,9 +162,12 @@ function orgView(customerId, licensedSeats = null) {
     })).sort((a, b) => b.used - a.used);
   }
 
+  const clients = clientBreakdown(customerId);
   return {
     customerId,
     generatedAt: new Date().toISOString(),
+    isProvider: clients.length > 0,
+    clients,
     seats: seatUsage(customerId, licensedSeats),
     tickets,
     totals: {
@@ -154,4 +182,4 @@ function orgView(customerId, licensedSeats = null) {
   };
 }
 
-module.exports = { orgView, devicesForOrg, seatUsage };
+module.exports = { orgView, devicesForOrg, seatUsage, clientBreakdown };

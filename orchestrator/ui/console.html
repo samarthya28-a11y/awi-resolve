@@ -185,6 +185,22 @@ function render(d) {
   $('view').hidden = false;
   const seatHtml = renderSeats(d.seats);
   renderTickets(d.tickets);
+
+  // An IT provider account sees its client sites. A client account never gets
+  // this block, because it has no children — the same scoping that keeps one
+  // client from seeing another.
+  if (d.isProvider && d.clients.length) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<h2 style="margin:0 0 4px;font-size:16px">Client sites</h2>
+      <p class="muted" style="margin:0 0 12px">PCs you manage, by site. Tickets come from your shared pool;
+      you can cap any site's monthly usage so one cannot drain it.</p>
+      <div class="scroll"><table>
+        <tr><th>Site</th><th>PCs</th></tr>
+        ${d.clients.map((c) => `<tr><td><strong>${esc(c.client)}</strong></td><td>${c.pcs}</td></tr>`).join('')}
+      </table></div>`;
+    $('tickets').appendChild(card);
+  }
   if (seatHtml) {
     const card = document.createElement('div');
     card.className = 'card';
