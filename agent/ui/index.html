@@ -204,7 +204,8 @@ function renderTelemetryAsk() {
     + 'how many security detections and pending updates there are, and free disk and memory. '
     + 'It helps us spot problems early and improve the product.<br><br>'
     + '<strong>What is never sent:</strong> your files, emails, documents, passwords, or anything you type here.'
-    + '<br><br>Resolve works exactly the same either way. You can change your mind at any time.</div>'
+    + '<br><br>Resolve works exactly the same either way. You can change your mind at any time. '
+    + '<a href="https://www.alphawebin.com/privacy" target="_blank" rel="noopener" style="color:inherit">Full privacy policy</a>.</div>'
     + '<div class="btns"><button class="ok">Yes, that\'s fine</button><button class="no">No thanks</button></div>';
   c.querySelector('.ok').onclick = () => telemetryAnswer(c, true);
   c.querySelector('.no').onclick = () => telemetryAnswer(c, false);
