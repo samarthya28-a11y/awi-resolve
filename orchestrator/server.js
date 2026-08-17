@@ -25,6 +25,7 @@ const { recordPosture, fleetView } = require('./fleet');
 const { buildReport, saveReport, listReports, getReport } = require('./report');
 const ledger = require('./ledger');
 const learning = require('./learning');
+const { prospects } = require('./prospects');
 
 // The fleet dashboard exposes customer security posture, so it is never open.
 // Set RESOLVE_DASHBOARD_TOKEN to enable it; unset = dashboard disabled entirely.
@@ -717,6 +718,35 @@ const httpServer = http.createServer(async (req, res) => {
     audit({ event: 'console_viewed', customerId });
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     return res.end(JSON.stringify(customerConsole.orgView(customerId, orgSeats.get(customerId) || null)));
+  }
+
+  // Sales prospects. Alpha Web's dashboard token ONLY: this deliberately reads
+  // across customers, which is precisely why an org token must never reach it.
+  if (route === '/api/prospects' || route === '/prospects') {
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!DASHBOARD_TOKEN || !tokenOk(supplied)) {
+      audit({ event: 'prospects_denied', from: req.socket.remoteAddress });
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    const list = prospects();
+    if (route === '/prospects') {
+      // Plain text on purpose: this is a call list someone reads down, not a
+      // dashboard to admire.
+      const lines = list.length
+        ? list.map((p, i) => {
+            const head = `${String(i + 1).padStart(2)}. ${p.customerId}  (${p.pcs} PCs, `
+              + `${p.sessions} sessions${p.ticketBalance != null ? `, ${p.ticketBalance} tickets` : ''})`;
+            const rest = p.signals.slice(1).map((sig) => `      - ${sig.say}`);
+            return [head, `    ${p.headline}`, ...rest].join('\n');
+          }).join('\n\n')
+        : 'No prospects with a signal right now.';
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(`ALPHA WEB - WHO TO CALL\n${'='.repeat(60)}\n\n${lines}\n`);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ generatedAt: new Date().toISOString(), prospects: list }));
   }
 
   // Selling tickets. Alpha Web's dashboard token only — never the org token.
