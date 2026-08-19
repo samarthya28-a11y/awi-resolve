@@ -39,9 +39,20 @@ const PLANS = {
   none:     { label: 'Unlicensed',      diagnostics: true, fixes: false, deployment: false, security: false, fullSupport: false },
   trial:    { label: 'Trial',           diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: false },
   // One-off paid pass. Bounded by a window of TIME that starts on first use
-  // (see validForHours below) plus a small ticket allowance in the ledger. Same
-  // safety envelope as Standard.
-  incident: { label: '24-hour pass',    diagnostics: true, fixes: true,  deployment: false, security: true,  fullSupport: false },
+  // (see validForHours below) plus a small ticket allowance in the ledger.
+  //
+  // Deliberately FULLY LOADED. The pass exists to show a prospect what the
+  // product does, and a demo that quietly withholds the most persuasive feature
+  // is a bad demo — it was also, absurdly, less capable than the free trial,
+  // which grants deployment. The bounds that matter are time and tickets, both
+  // of which the customer can see; capability limits they cannot see just make
+  // the product look weaker than it is.
+  //
+  // fullSupport here does NOT open consented PowerShell on its own: that is
+  // dual-gated and still needs the org admin to enable it (org-library
+  // allowFullItSupport, off by default). This only means a prospect who wants
+  // to evaluate that tier is not blocked by the licence.
+  incident: { label: '24-hour pass',    diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: true  },
   standard: { label: 'Standard',        diagnostics: true, fixes: true,  deployment: false, security: true,  fullSupport: false },
   pro:      { label: 'Pro',             diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: false },
   // Full IT Support — allowlisted tools PLUS consented PowerShell (org admin must also enable).
