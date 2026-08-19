@@ -76,9 +76,43 @@ const ORCHESTRATOR_TOOLS = new Set([
   'list_org_approved_software',
   'read_org_software_manual',
   'deploy_org_software',
+  // Microsoft 365. Cloud-side because the credentials are tenant-wide and must
+  // never sit on an end user's PC — and because the affected user's machine is
+  // often not the one we are connected to.
+  'm365_find_user',
+  'm365_licence_details',
+  'm365_recent_signins',
+  'm365_onedrive_status',
 ]);
 
 const TOOLS = [
+  // ---- Microsoft 365 (cloud-side, read-only) ----
+  // These answer questions about a user in the customer's Microsoft tenant,
+  // NOT about the PC we are connected to. Use them when the problem is with a
+  // Microsoft service — OneDrive, SharePoint, sign-in, licensing — especially
+  // when the affected person is not sitting at this machine.
+  { name: 'm365_find_user',
+    description: 'Look up a user in the customer\'s Microsoft 365 tenant by email or UPN. Says whether they exist, whether sign-in is blocked, whether they hold any licence, and whether a usage location is set. Start here for any Microsoft 365 problem.',
+    input_schema: { type: 'object', properties: {
+      user: { type: 'string', description: 'Email address or user principal name, e.g. info@contoso.com' },
+    }, required: ['user'], additionalProperties: false } },
+  { name: 'm365_licence_details',
+    description: 'The licences assigned to a Microsoft 365 user and, crucially, whether the OneDrive/SharePoint service plans inside them are enabled. A licence can be assigned with the exact service the user needs switched off. Use for "cannot access OneDrive/SharePoint".',
+    input_schema: { type: 'object', properties: {
+      user: { type: 'string', description: 'Email address or user principal name' },
+    }, required: ['user'], additionalProperties: false } },
+  { name: 'm365_recent_signins',
+    description: 'Recent sign-in attempts for a Microsoft 365 user with failure reasons and conditional-access outcome. Use to tell a blocked sign-in or a conditional-access policy apart from a permission problem. Needs AuditLog.Read.All and Entra ID P1 on the tenant.',
+    input_schema: { type: 'object', properties: {
+      user: { type: 'string', description: 'Email address or user principal name' },
+      limit: { type: 'number', description: 'How many sign-ins to return (1-25, default 10)' },
+    }, required: ['user'], additionalProperties: false } },
+  { name: 'm365_onedrive_status',
+    description: 'Whether a user\'s OneDrive has actually been provisioned, plus its quota state. A OneDrive that was never created looks exactly like "access denied" to the user but is a completely different fix.',
+    input_schema: { type: 'object', properties: {
+      user: { type: 'string', description: 'Email address or user principal name' },
+    }, required: ['user'], additionalProperties: false } },
+
   // ---- Tier 0: read-only diagnostics (run silently) ----
   { name: 'get_system_snapshot',
     description: 'Snapshot of the customer PC: OS, uptime, memory, C: disk space, installed printers (driver/port/status). No parameters. Start here.',

@@ -13,6 +13,7 @@ const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
 const { evaluate: evaluateLicense, beginIfTimeBoxed } = require('./licensing');
 const licenceIssue = require('./licence-issue');
+const microsoft = require('./microsoft');
 const orgLibrary = require('./org-library');
 
 // deviceId -> licence evaluation, consulted before any tool that changes the PC.
@@ -92,6 +93,51 @@ function audit(event) {
 const pendingCalls = new Map(); // callId -> resolve()
 
 async function resolveCloudTool(ws, deviceId, customerId, name, input) {
+  // ---- Microsoft 365 -------------------------------------------------------
+  // Answers questions about a user in the customer's Microsoft tenant, not
+  // about the PC we are connected to. Runs here rather than on the agent
+  // because the credentials are tenant-wide and have no business on an end
+  // user's laptop, and because the affected user is frequently at a different
+  // machine entirely.
+  if (name.startsWith('m365_')) {
+    if (!customerId) {
+      return {
+        status: 'error',
+        reason: 'This PC is not linked to a customer organisation, so I cannot tell which Microsoft tenant to look in.',
+      };
+    }
+    if (!microsoft.isConfigured(customerId)) {
+      return {
+        status: 'error',
+        reason:
+          'No Microsoft 365 tenant is connected for this organisation. An Alpha Web admin connects one in the licence manager; ' +
+          'it needs the customer to register an app in their Entra ID and grant read-only consent. Until then, advise on the ' +
+          'admin-portal steps instead of trying to look anything up.',
+      };
+    }
+    const user = input && input.user;
+    try {
+      switch (name) {
+        case 'm365_find_user':
+          return { status: 'ok', result: await microsoft.findUser(customerId, user) };
+        case 'm365_licence_details':
+          return { status: 'ok', result: await microsoft.licenceDetails(customerId, user) };
+        case 'm365_recent_signins':
+          return { status: 'ok', result: await microsoft.recentSignIns(customerId, user, input && input.limit) };
+        case 'm365_onedrive_status':
+          return { status: 'ok', result: await microsoft.oneDriveStatus(customerId, user) };
+        default:
+          return { status: 'error', reason: `Unknown Microsoft 365 tool "${name}".` };
+      }
+    } catch (e) {
+      // Microsoft's own message is genuinely diagnostic here — a missing
+      // permission, an expired secret, consent never granted — so pass it
+      // through rather than flattening it to "lookup failed".
+      audit({ event: 'm365_tool_failed', deviceId, customerId, tool: name, reason: e.message });
+      return { status: 'error', reason: e.message };
+    }
+  }
+
   if (name === 'list_org_approved_software') {
     if (!customerId) {
       return {
@@ -823,6 +869,57 @@ const httpServer = http.createServer(async (req, res) => {
     return res.end(JSON.stringify({
       customers: orgs.map((o) => ({ ...o, pcs: pcCount[o.customerId] || 0 })),
     }));
+  }
+
+  // Connect (or inspect, or disconnect) a customer's Microsoft 365 tenant.
+  // Alpha Web's dashboard token only — these are tenant-wide credentials.
+  if (route === '/api/admin/m365' && ['GET', 'POST', 'DELETE'].includes(req.method)) {
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!DASHBOARD_TOKEN || !tokenOk(supplied)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    const reply = (code, obj) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      if (req.method === 'GET') {
+        const cid = orgLibrary.slugify(url.searchParams.get('customerId') || '');
+        if (!cid) throw new Error('customerId required');
+        // Never returns the client secret — see microsoft.tenantInfo.
+        return reply(200, { customerId: cid, tenant: microsoft.tenantInfo(cid) });
+      }
+      const body = await readJsonBody(req);
+      const cid = orgLibrary.slugify(body.customerId || url.searchParams.get('customerId') || '');
+      if (!cid) throw new Error('customerId required');
+
+      if (req.method === 'DELETE') {
+        const existed = microsoft.removeTenant(cid);
+        audit({ event: 'm365_tenant_removed', customerId: cid, existed });
+        log(`Microsoft tenant disconnected for ${cid}`);
+        return reply(200, { customerId: cid, removed: existed });
+      }
+
+      const saved = microsoft.setTenant(cid, body);
+      audit({ event: 'm365_tenant_connected', customerId: cid, tenantId: saved.tenantId });
+      log(`Microsoft tenant connected for ${cid} (${saved.tenantId})`);
+
+      // Prove it works now, while whoever configured it is still watching.
+      // Discovering a wrong secret during a customer's outage is the worst
+      // possible time to find out.
+      let check;
+      try {
+        await microsoft.findUser(cid, body.testUser || 'nobody@invalid.invalid');
+        check = { ok: true, note: 'Signed in to the tenant and Graph responded.' };
+      } catch (e) {
+        check = { ok: false, note: e.message };
+      }
+      return reply(200, { customerId: cid, tenant: saved, check });
+    } catch (e) {
+      return reply(400, { error: e.message });
+    }
   }
 
   // Issue a licence. Alpha Web's dashboard token only.
