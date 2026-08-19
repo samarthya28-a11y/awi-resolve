@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const ledger = require('./ledger');
 
-const DATA_DIR = path.join(__dirname, 'data');
+const { DATA_DIR } = require('./paths');
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, file), 'utf8')); }

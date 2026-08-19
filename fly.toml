@@ -7,6 +7,22 @@ primary_region = "sin"  # Singapore — lowest latency to India; change if you p
 
 [env]
   PORT = "8787"
+  # State must NOT live in the image — Fly replaces the image on every deploy,
+  # which would erase ticket balances and console tokens. Points at the volume
+  # mounted below.
+  RESOLVE_DATA_DIR = "/data"
+
+# Ticket ledger, console tokens, device enrollments and session reports. This
+# volume is the only reason a redeploy is safe.
+#
+# It must exist before the first deploy:
+#   fly volumes create resolve_data --size 1 --region sin
+#
+# Fly does not replicate volumes. Snapshots are taken daily and kept 5 days;
+# treat that as the recovery story, and take a manual snapshot before risky work.
+[[mounts]]
+  source = "resolve_data"
+  destination = "/data"
 
 [http_service]
   internal_port = 8787

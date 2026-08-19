@@ -9,7 +9,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const REPORTS_DIR = path.join(__dirname, 'data', 'reports');
+const { DATA_DIR } = require('./paths');
+const REPORTS_DIR = path.join(DATA_DIR, 'reports');
 
 // Plain-English names so a non-technical reader understands the record.
 const TOOL_LABELS = {

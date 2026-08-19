@@ -24,7 +24,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
+// Money lives in this file. In production DATA_DIR is a mounted volume — if it
+// ever resolves to the container image instead, every paid balance is one
+// deploy away from being erased.
+const { DATA_DIR } = require('./paths');
 const LEDGER_FILE = path.join(DATA_DIR, 'ledger.json');
 
 // Deliberately small: enough to finish an emergency, not enough to be a

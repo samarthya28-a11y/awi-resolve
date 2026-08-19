@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const ledger = require('./ledger');
 
-const DATA_DIR = path.join(__dirname, 'data');
+const { DATA_DIR } = require('./paths');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const REPORTS_DIR = path.join(DATA_DIR, 'reports');
 

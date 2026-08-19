@@ -99,20 +99,32 @@ function issue() {
   console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
   if (devices.length) console.log(`Devices  : ${devices.join(', ')}`);
 
-  // Credit the pass's tickets at issue time so it works the moment the key is
+  // Credit tickets at issue time so the licence works the moment the key is
   // pasted in, rather than depending on someone remembering a second step.
-  if (plan === 'incident') {
+  //
+  // The pass defaults to PASS_TICKETS; any plan can be given an explicit
+  // allowance with --tickets. That matters for a demo licence: a trial with no
+  // ledger record runs UNMETERED (ledger.canOpen returns metered:false when the
+  // org is unknown), so a bounded evaluation needs the tickets credited or the
+  // bound does not exist.
+  const tickets = Number(arg('tickets', String(plan === 'incident' ? PASS_TICKETS : 0)));
+  if (!Number.isFinite(tickets) || tickets < 0) {
+    console.error('--tickets must be zero or a positive number');
+    process.exit(1);
+  }
+  if (tickets > 0) {
     if (payload.customerId) {
       try {
         const ledger = require('../orchestrator/ledger');
-        const out = ledger.credit(payload.customerId, PASS_TICKETS, { note: '24-hour pass' });
-        console.log(`Tickets  : ${PASS_TICKETS} credited to ${payload.customerId} (balance ${out.balance})`);
+        const note = plan === 'incident' ? '24-hour pass' : `${plan} licence`;
+        const out = ledger.credit(payload.customerId, tickets, { note });
+        console.log(`Tickets  : ${tickets} credited to ${payload.customerId} (balance ${out.balance})`);
       } catch (e) {
-        console.error(`WARNING: could not credit pass tickets: ${e.message}`);
+        console.error(`WARNING: could not credit tickets: ${e.message}`);
       }
     } else {
-      console.error('WARNING: no --customer-id given, so the pass tickets were NOT credited and');
-      console.error('         this pass will run unmetered. Re-issue with --customer-id <org-slug>.');
+      console.error('WARNING: no --customer-id given, so the tickets were NOT credited and this');
+      console.error('         licence will run UNMETERED. Re-issue with --customer-id <org-slug>.');
     }
   }
   console.log('');

@@ -9,8 +9,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const LIB_DIR = path.join(__dirname, 'data', 'org-libraries');
-const ADMIN_TOKENS_FILE = path.join(__dirname, 'data', 'admin-tokens.json');
+const { DATA_DIR } = require('./paths');
+const LIB_DIR = path.join(DATA_DIR, 'org-libraries');
+const ADMIN_TOKENS_FILE = path.join(DATA_DIR, 'admin-tokens.json');
 
 fs.mkdirSync(LIB_DIR, { recursive: true });
 

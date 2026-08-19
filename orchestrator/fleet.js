@@ -5,13 +5,14 @@
 // a prioritised risk view for the ops dashboard. Reports are read-only summaries
 // (no file contents, no personal data).
 //
-// NOTE: this writes to local disk, which is ephemeral on the cloud host. Before a
-// real pilot this should move to Supabase (db/schema.sql is ready).
+// NOTE: this writes to a plain file. That survives restarts only because the
+// data directory is a mounted volume in production (see paths.js). Before a
+// real pilot it should move to Supabase (db/schema.sql is ready).
 
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, 'data');
+const { DATA_DIR } = require('./paths');
 const FLEET_FILE = path.join(DATA_DIR, 'fleet.json');
 
 const STALE_DEFINITIONS_DAYS = 3;

@@ -49,7 +49,7 @@ const ENROLLMENT_SECRET = process.env.RESOLVE_ENROLLMENT_SECRET || '';
 
 // Fly/most hosts inject PORT; fall back to our dev default.
 const PORT = Number(process.env.PORT || process.env.RESOLVE_PORT || 8787);
-const DATA_DIR = path.join(__dirname, 'data');
+const { DATA_DIR } = require('./paths');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const AUDIT_FILE = path.join(DATA_DIR, 'audit.jsonl');
 const REPORT_FILE = path.join(DATA_DIR, 'demo-report.json');
