@@ -12,6 +12,7 @@ const { diagnose, MODEL, pickModel, resolveOrchestratorTool } = require('./ai');
 const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
 const { evaluate: evaluateLicense, beginIfTimeBoxed } = require('./licensing');
+const licenceIssue = require('./licence-issue');
 const orgLibrary = require('./org-library');
 
 // deviceId -> licence evaluation, consulted before any tool that changes the PC.
@@ -50,6 +51,11 @@ const API_KEY = process.env.ANTHROPIC_API_KEY;
 // Door key: when set (always in production), an agent must present a matching
 // enrollmentSecret to connect. Unset in local dev => open, for convenience.
 const ENROLLMENT_SECRET = process.env.RESOLVE_ENROLLMENT_SECRET || '';
+
+// Licence signing key (PEM). Present only where licences are issued; the
+// service runs perfectly well without it and simply refuses to issue. Absent by
+// default so a self-hosted or development connector never holds it by accident.
+const SIGNING_KEY = process.env.RESOLVE_LICENCE_SIGNING_KEY || '';
 
 // Fly/most hosts inject PORT; fall back to our dev default.
 const PORT = Number(process.env.PORT || process.env.RESOLVE_PORT || 8787);
@@ -790,6 +796,65 @@ const httpServer = http.createServer(async (req, res) => {
       log(`sold ${body.tickets} ticket(s) to ${cid} — balance now ${out.balance}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(out));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: e.message }));
+    }
+  }
+
+  // Issue a licence. Alpha Web's dashboard token only.
+  //
+  // Lives here rather than on the website because this is where the signing key
+  // is: one place holds it, one place to rotate it, and the website holds only
+  // an API token. Issuing and crediting happen together — a licence whose
+  // tickets were never credited runs unmetered, which is a silent revenue leak.
+  if (route === '/api/admin/issue-licence' && req.method === 'POST') {
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!DASHBOARD_TOKEN || !tokenOk(supplied)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    if (!SIGNING_KEY) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        error: 'No signing key on this service. Set RESOLVE_LICENCE_SIGNING_KEY to issue licences.',
+      }));
+    }
+    try {
+      const body = await readJsonBody(req);
+      const customerId = body.customerId ? orgLibrary.slugify(body.customerId) : '';
+      const { key, payload } = licenceIssue.issueLicence({
+        customer: body.customer,
+        customerId: customerId || undefined,
+        plan: body.plan,
+        seats: body.seats,
+        days: body.days,
+        validForHours: body.validForHours,
+      }, SIGNING_KEY);
+
+      // Credit the allowance in the same call. Doing it as a separate step is
+      // how an order ends up half-fulfilled.
+      const tickets = Number(
+        body.tickets == null ? licenceIssue.defaultTickets(payload.plan) : body.tickets
+      );
+      let balance = null;
+      if (tickets > 0) {
+        if (!customerId) throw new Error('customerId is required to credit tickets');
+        const out = ledger.credit(customerId, tickets, { note: `${payload.plan} licence` });
+        balance = out.balance;
+        log(`issued ${payload.plan} licence to ${payload.customer} [${customerId}] with ${tickets} ticket(s) — balance ${balance}`);
+      } else {
+        log(`issued ${payload.plan} licence to ${payload.customer}${customerId ? ` [${customerId}]` : ''}`);
+      }
+
+      audit({
+        event: 'licence_issued', customerId: customerId || null,
+        licenseId: payload.licenseId, plan: payload.plan, seats: payload.seats,
+        expiresAt: payload.expiresAt, validForHours: payload.validForHours || null, tickets,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      return res.end(JSON.stringify({ key, payload, tickets, balance }));
     } catch (e) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: e.message }));
