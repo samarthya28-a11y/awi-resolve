@@ -11,7 +11,7 @@ const { WebSocketServer } = require('ws');
 const { diagnose, MODEL, pickModel, resolveOrchestratorTool } = require('./ai');
 const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
-const { evaluate: evaluateLicense, beginIfTimeBoxed } = require('./licensing');
+const { evaluate: evaluateLicense, beginIfTimeBoxed, PLANS: LICENCE_PLANS } = require('./licensing');
 const licenceIssue = require('./licence-issue');
 const microsoft = require('./microsoft');
 const orgLibrary = require('./org-library');
@@ -91,6 +91,33 @@ function audit(event) {
 }
 
 const pendingCalls = new Map(); // callId -> resolve()
+
+/**
+ * What the customer's own window is allowed to know about their licence.
+ *
+ * Enough to show "Standard, 340 days left" or to prompt for a key, and nothing
+ * that would help someone forge one. Sent on every connection so the window can
+ * offer activation the moment it is needed, rather than making the customer
+ * find and hand-edit a JSON file.
+ */
+function licenceSummary(lic) {
+  if (!lic) return { valid: false, plan: 'none', reason: 'no licence' };
+  return {
+    valid: Boolean(lic.valid),
+    plan: lic.plan || 'none',
+    label: (LICENCE_PLANS[lic.plan] || LICENCE_PLANS.none).label,
+    customer: lic.customer || null,
+    expiresAt: lic.expiresAt || null,
+    daysLeft: lic.daysLeft != null ? lic.daysLeft : null,
+    expired: Boolean(lic.expired),
+    reason: lic.reason || null,
+    // A time-boxed pass that has not been started yet — worth saying so, since
+    // "0 days left" would be alarming and wrong.
+    timeBoxed: Boolean(lic.timeBoxed),
+    startedAt: lic.startedAt || null,
+    hoursLeft: lic.hoursLeft != null ? Math.round(lic.hoursLeft) : null,
+  };
+}
 
 async function resolveCloudTool(ws, deviceId, customerId, name, input) {
   // ---- Microsoft 365 -------------------------------------------------------
@@ -1111,6 +1138,15 @@ wss.on('connection', (ws) => {
       // agent and pasting a key is setup, not support — the clock starts on the
       // first actual request, at the ticket gate.
       if (msg.licenseKey) deviceLicenseKeys.set(deviceId, msg.licenseKey);
+
+      // Tell the window its licence state, so it can offer activation rather
+      // than making the customer hand-edit config.json.
+      //
+      // Sent HERE, after `lic` exists — not alongside the enrolled/welcome_back
+      // message above, where `lic` is still in its temporal dead zone. Doing
+      // that crashed the connector on every single agent connection.
+      ws.send(JSON.stringify({ type: 'licence_state', licence: licenceSummary(lic) }));
+
       // Remember which organisation this PC belongs to. The customer console
       // scopes on it, and it has to survive a restart — deviceLicenses is only
       // in memory and only covers currently-connected machines.

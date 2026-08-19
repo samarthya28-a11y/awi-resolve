@@ -18,13 +18,21 @@ const { selfCheck } = require('./selfcheck');
 // Config precedence: env var > config.json (next to the app) > default. The
 // installer writes config.json so the packaged app can point at the cloud
 // orchestrator without editing code or setting env vars.
+//
+// CONFIG_PATH is remembered so a licence pasted into the support window is
+// written back to the SAME file the agent read, and not to a second config
+// that never gets loaded.
+let CONFIG_PATH = path.join(__dirname, '..', 'config.json');
+
 function loadConfig() {
   for (const p of [path.join(__dirname, '..', 'config.json'), path.join(__dirname, 'config.json')]) {
     try {
       // Strip a UTF-8 BOM if present — Windows editors / PowerShell often write one,
       // and JSON.parse rejects it, which silently drops the licence key.
       const raw = fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '');
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      CONFIG_PATH = p;
+      return parsed;
     } catch { /* try next */ }
   }
   return {};
@@ -33,7 +41,13 @@ const CONFIG = loadConfig();
 const ORCH_URL = process.env.RESOLVE_ORCH_URL || CONFIG.orchestratorUrl || 'ws://127.0.0.1:8787';
 const UI_PORT = Number(process.env.RESOLVE_UI_PORT || CONFIG.uiPort || 8790);
 const ENROLLMENT_SECRET = process.env.RESOLVE_ENROLLMENT_SECRET || CONFIG.enrollmentSecret || '';
-const LICENSE_KEY = process.env.RESOLVE_LICENSE_KEY || CONFIG.licenseKey || '';
+// Not const: a customer can paste a key into the support window, and the whole
+// point is that it takes effect without them finding and editing a JSON file.
+let LICENSE_KEY = process.env.RESOLVE_LICENSE_KEY || CONFIG.licenseKey || '';
+
+// The orchestrator's last word on this machine's licence. Held so a window
+// opened long after startup still learns whether it needs activating.
+let lastLicenceState = null;
 const CUSTOMER_ID = process.env.RESOLVE_CUSTOMER_ID || CONFIG.customerId || '';
 const AGENT_VERSION = '0.3.0';
 const CONSENT_TIMEOUT_MS = 60000; // spec §7: timeout is treated as declined
@@ -89,12 +103,52 @@ function startUiServer() {
   wss.on('connection', (client) => {
     uiClients.add(client);
     client.send(JSON.stringify({ type: 'hello', hostname: os.hostname() }));
+    // The agent starts at boot and the customer opens this window hours later,
+    // so the licence state it was told at enrollment has long since been sent
+    // to nobody. Replay the last known state to every window that opens, or an
+    // unlicensed PC would never show the activation prompt at all.
+    if (lastLicenceState) {
+      client.send(JSON.stringify({ type: 'licence', licence: lastLicenceState }));
+    }
     // Ask once, on the first window the customer opens. Until they answer,
     // nothing is uploaded (see sendPostureReport).
     const consent = readConsent();
     if (!consent.decided) client.send(JSON.stringify({ type: 'telemetry_ask' }));
     client.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      if (m.type === 'activate_licence') {
+        // Save a pasted licence key and reconnect so the orchestrator
+        // re-evaluates it. The agent does NOT judge whether the key is valid —
+        // it cannot be trusted to, since it runs on the customer's own PC. It
+        // only checks the shape, to catch a half-copied paste before a
+        // reconnect makes the failure look like a network problem.
+        const key = String(m.key || '').replace(/\s+/g, '');
+        if (!/^RSLIC1-[A-Za-z0-9_-]{40,}$/.test(key)) {
+          toUI({ type: 'licence_result', ok: false,
+            message: 'That does not look like a complete licence key. It starts with RSLIC1- and is one long line — copy the whole thing.' });
+          return;
+        }
+        try {
+          // Merge rather than overwrite: config.json also carries the
+          // orchestrator URL and enrollment secret, and losing those would
+          // disconnect the PC entirely.
+          let current = {};
+          try { current = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8').replace(/^﻿/, '')); } catch { current = {}; }
+          current.licenseKey = key;
+          fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2));
+          LICENSE_KEY = key;
+          log(`licence key saved to ${CONFIG_PATH} — reconnecting to verify`);
+          toUI({ type: 'licence_result', ok: true, message: 'Key saved. Checking it…' });
+          // Reconnect: the orchestrator verifies the signature and replies with
+          // the real licence state, which the window then displays.
+          if (orchWs) { try { orchWs.close(); } catch { /* already gone */ } }
+        } catch (e) {
+          log(`could not save licence key: ${e.message}`);
+          toUI({ type: 'licence_result', ok: false,
+            message: `Could not save the key to ${CONFIG_PATH}: ${e.message}. Try running Resolve as administrator.` });
+        }
+        return;
+      }
       if (m.type === 'telemetry_choice') {
         const rec = writeConsent(m.allowed);
         log(`customer ${rec.allowed ? 'allowed' : 'declined'} health reporting`);
@@ -351,6 +405,13 @@ function connect(identity) {
       case 'welcome_back':
         log('recognized by orchestrator (already enrolled)');
         startPostureReporting(ws);
+        break;
+      // The orchestrator is the authority on licence state; the window shows
+      // whatever it says, including an activation prompt when unlicensed.
+      case 'licence_state':
+        log(`licence: ${msg.licence.plan}${msg.licence.valid ? '' : ' (not active)'}`);
+        lastLicenceState = msg.licence;
+        toUI({ type: 'licence', licence: msg.licence });
         break;
       case 'auth_failed': log('AUTH FAILED — identity rejected, not retrying'); ws.close(); process.exit(1); break;
       case 'tool_call': handleToolCall(ws, msg); break;

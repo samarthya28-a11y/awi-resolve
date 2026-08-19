@@ -79,6 +79,21 @@
   .consent.answered { opacity:.55; }
   .consent.answered .btns { display:none; }
 
+  /* Licence bar. Amber rather than red: an unlicensed PC still gets full
+     diagnostics, so this is something to do, not something broken. */
+  #licence { background:#fff8e8; border-bottom:1px solid #f0d9a8; padding:14px 22px; }
+  #licence .lic-head { display:flex; align-items:baseline; gap:10px; margin-bottom:8px; }
+  #licence .lic-head strong { font-size:15px; color:#7a5300; }
+  #licence .lic-head span { font-size:13px; color:#8a7350; }
+  #licence .lic-row { display:flex; gap:10px; }
+  #licence input { flex:1; padding:9px 12px; border:1px solid #e0cfa4; border-radius:8px;
+                   font-family:ui-monospace,Consolas,monospace; font-size:13px; background:#fff; }
+  #licence button { padding:9px 18px; border:0; border-radius:8px; background:var(--orange,#F47521);
+                    color:#fff; font-weight:700; font-size:14px; cursor:pointer; }
+  #licence button:disabled { opacity:.55; cursor:default; }
+  #licence .lic-msg { margin-top:8px; font-size:13px; }
+  #licence .lic-msg.ok { color:#1d7a3c; }
+  #licence .lic-msg.bad { color:#b3261e; }
   footer { display:flex; gap:12px; padding:16px 22px; background:#fff; border-top:1px solid var(--line); position:relative; }
   footer.drag-over { outline:2px dashed var(--brand-blue); outline-offset:-6px; background:rgba(0,174,239,.06); }
   #box { flex:1; resize:none; font-family:inherit; font-size:14.5px; color:var(--ink);
@@ -104,6 +119,18 @@
     <span class="product"><img class="mark" src="/resolve-mark.svg" alt="" /><span class="g">AWI Resolve</span> · Automated IT Support</span>
     <span class="status"><span class="dot" id="dot"></span><span id="host">connecting…</span></span>
   </header>
+  <!-- Licence state. Hidden entirely when a valid licence is in place: a
+       working product should not nag. Shown when unlicensed or expired, with
+       the box to paste a key, so a customer never has to find and hand-edit
+       config.json — which is a support call every single time. -->
+  <div id="licence" hidden>
+    <div class="lic-head"><strong id="lic-title">Activate Resolve</strong><span id="lic-sub"></span></div>
+    <div class="lic-row">
+      <input id="lic-key" type="text" placeholder="Paste your licence key (RSLIC1-…)" spellcheck="false" autocomplete="off" />
+      <button id="lic-go">Activate</button>
+    </div>
+    <div id="lic-msg" class="lic-msg"></div>
+  </div>
   <div id="feed"></div>
   <footer>
     <input type="file" id="file" accept=".txt,.md,.log,.csv,.json,.htm,.html,.png,.jpg,.jpeg,.gif,.webp" hidden />
@@ -150,6 +177,8 @@ function handle(m) {
   if (busy) armWatchdog(); // activity — reset the silence timer
   switch (m.type) {
     case 'hello': hostEl.textContent = m.hostname; break;
+    case 'licence': renderLicence(m.licence); break;
+    case 'licence_result': showLicenceMsg(m.ok, m.message); break;
     case 'status': setStatus(m.text); break;
     case 'ai_message': clearStatus(); el('msg ai', m.text); break;
     case 'action': { clearStatus(); const d = el('action'); d.innerHTML = '<span class="tick">✓</span> ' + m.text; break; }
@@ -175,6 +204,56 @@ function renderConsent(m) {
 // Offline findings. Presented as observations with suggestions, never as a
 // verdict — offline this is a short checklist, not the AI technician, and the
 // wording has to keep that distinction visible.
+// ---- licence -------------------------------------------------------------
+const licBox = document.getElementById('licence');
+const licTitle = document.getElementById('lic-title');
+const licSub = document.getElementById('lic-sub');
+const licKey = document.getElementById('lic-key');
+const licGo = document.getElementById('lic-go');
+const licMsg = document.getElementById('lic-msg');
+
+function showLicenceMsg(ok, text) {
+  licMsg.className = 'lic-msg ' + (ok ? 'ok' : 'bad');
+  licMsg.textContent = text || '';
+  // Re-enable on failure so the customer can correct a bad paste. On success
+  // the reconnect will re-render this whole bar from the server's answer.
+  if (!ok) { licGo.disabled = false; licGo.textContent = 'Activate'; }
+}
+
+function renderLicence(lic) {
+  if (!lic) return;
+  if (lic.valid) {
+    // Licensed and working — say nothing. A banner on a healthy install is
+    // noise, and noise is what people learn to ignore.
+    licBox.hidden = true;
+    licKey.value = '';
+    return;
+  }
+  licBox.hidden = false;
+  licGo.disabled = false;
+  licGo.textContent = 'Activate';
+  licMsg.textContent = '';
+  if (lic.expired) {
+    licTitle.textContent = 'Your licence has expired';
+    licSub.textContent = (lic.reason || '') + ' Diagnostics still work; fixes need an active licence.';
+  } else {
+    licTitle.textContent = 'Activate Resolve';
+    licSub.textContent = 'Paste the licence key from your Alpha Web email. Until then Resolve can diagnose, but not apply fixes.';
+  }
+}
+
+function activate() {
+  const key = licKey.value.trim();
+  if (!key) { showLicenceMsg(false, 'Paste your licence key first.'); return; }
+  licGo.disabled = true;
+  licGo.textContent = 'Checking…';
+  licMsg.textContent = '';
+  // Note: `send` in this file is the Get-help BUTTON, not a function.
+  ws.send(JSON.stringify({ type: 'activate_licence', key }));
+}
+licGo.addEventListener('click', activate);
+licKey.addEventListener('keydown', (e) => { if (e.key === 'Enter') activate(); });
+
 function renderSelfCheck(r) {
   const d = el('msg ai');
   const esc = (s) => String(s == null ? '' : s)
