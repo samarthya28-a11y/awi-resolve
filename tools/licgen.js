@@ -75,6 +75,14 @@ function issue() {
   // Hours of cover once started. Present => the licence is time-boxed and its
   // clock begins on first use, which is what makes expiresAt a deadline to
   // redeem rather than the end of cover.
+  // Machine mode, for the order-fulfilment script. Emits JSON instead of the
+  // human summary, so the caller never has to scrape a formatted line.
+  const jsonOut = process.argv.includes('--json');
+  // Skip the local ledger write. When fulfilling a real order the tickets must
+  // be credited on the HOSTED connector, and a local credit would be a second,
+  // invisible balance that never reaches the customer.
+  const noCredit = process.argv.includes('--no-credit');
+
   const validForHours = Number(arg('valid-for-hours', String(plan === 'incident' ? PASS_HOURS : 0)));
   if (!Number.isFinite(validForHours) || validForHours < 0) {
     console.error('--valid-for-hours must be zero or a positive number');
@@ -106,17 +114,19 @@ function issue() {
   const key = 'RSLIC1-' + Buffer.from(envelope, 'utf8').toString('base64')
     .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-  console.log('');
-  console.log(`Customer : ${customer}`);
-  if (payload.customerId) console.log(`Org id   : ${payload.customerId}`);
-  console.log(`Plan     : ${plan}   Seats: ${seats}`);
-  if (validForHours > 0) {
-    console.log(`Cover    : ${validForHours} hours, starting when the customer first uses it`);
-    console.log(`Redeem by: ${expires.toISOString().slice(0, 10)}  (${days} days to start it)`);
-  } else {
-    console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
+  if (!jsonOut) {
+    console.log('');
+    console.log(`Customer : ${customer}`);
+    if (payload.customerId) console.log(`Org id   : ${payload.customerId}`);
+    console.log(`Plan     : ${plan}   Seats: ${seats}`);
+    if (validForHours > 0) {
+      console.log(`Cover    : ${validForHours} hours, starting when the customer first uses it`);
+      console.log(`Redeem by: ${expires.toISOString().slice(0, 10)}  (${days} days to start it)`);
+    } else {
+      console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
+    }
+    if (devices.length) console.log(`Devices  : ${devices.join(', ')}`);
   }
-  if (devices.length) console.log(`Devices  : ${devices.join(', ')}`);
 
   // Credit tickets at issue time so the licence works the moment the key is
   // pasted in, rather than depending on someone remembering a second step.
@@ -131,13 +141,13 @@ function issue() {
     console.error('--tickets must be zero or a positive number');
     process.exit(1);
   }
-  if (tickets > 0) {
+  if (tickets > 0 && !noCredit) {
     if (payload.customerId) {
       try {
         const ledger = require('../orchestrator/ledger');
         const note = plan === 'incident' ? '24-hour pass' : `${plan} licence`;
         const out = ledger.credit(payload.customerId, tickets, { note });
-        console.log(`Tickets  : ${tickets} credited to ${payload.customerId} (balance ${out.balance})`);
+        if (!jsonOut) console.log(`Tickets  : ${tickets} credited to ${payload.customerId} (balance ${out.balance})`);
       } catch (e) {
         console.error(`WARNING: could not credit tickets: ${e.message}`);
       }
@@ -146,6 +156,12 @@ function issue() {
       console.error('         licence will run UNMETERED. Re-issue with --customer-id <org-slug>.');
     }
   }
+
+  if (jsonOut) {
+    process.stdout.write(JSON.stringify({ key, payload }) + '\n');
+    return;
+  }
+
   console.log('');
   console.log('Licence key — paste this into the customer\'s Resolve window:');
   console.log('');

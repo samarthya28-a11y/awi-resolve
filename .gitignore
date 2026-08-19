@@ -2,6 +2,10 @@
 .env
 tools/licensing-key.pem
 packaging/full-license-key.txt
+# Operator settings: holds the connector's dashboard token and enrollment
+# secret. Committing it would hand anyone who reads the repo the ability to
+# credit themselves tickets.
+tools/operator.json
 orchestrator/data/
 
 # Build output. Regenerate with packaginguild.ps1 — never commit it: the
