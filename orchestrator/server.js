@@ -403,8 +403,20 @@ const busyDevices = new Set();
 const customerManuals = new Map();
 // Live conversations per device, so follow-ups ("done step 3", "here's the
 // error") continue the same session instead of starting cold.
-const conversations = new Map();   // deviceId -> { messages, lastAt, opened }
+const conversations = new Map();   // deviceId -> { messages, lastAt, opened, turns }
 const CONVERSATION_TTL_MS = 60 * 60 * 1000;   // an hour of quiet = new session
+
+// How many messages one ticket buys, including the first.
+//
+// Time alone is not a bound. A conversation capped only by an hour of quiet
+// could take fifty follow-ups, each running the full tool loop, and every one
+// of them costs tokens against a ticket that was paid for once. That is how a
+// per-ticket price becomes loss-making on exactly the customers who use it most.
+//
+// Five is generous for a real support exchange — investigate, answer, two
+// clarifications, confirm — and nobody is cut off: the next message simply
+// starts a new ticket, which is said plainly before it happens.
+const MAX_TURNS_PER_TICKET = 5;
 // Screenshots/images attached but not yet handed to the AI.
 const pendingImages = new Map();   // deviceId -> [{mediaType, data}]
 
@@ -437,13 +449,29 @@ async function runTicket(ws, deviceId, ticket) {
 
     // Resume an in-flight conversation if the customer is replying to us.
     const prior = conversations.get(deviceId);
-    const isFollowUp = !!(prior && (Date.now() - prior.lastAt) < CONVERSATION_TTL_MS);
+    const withinWindow = !!(prior && (Date.now() - prior.lastAt) < CONVERSATION_TTL_MS);
+    // Two things end a conversation: an hour of quiet, or running out of turns.
+    // Without the second, one ticket could fund an unlimited number of AI runs.
+    const turnsUsed = (prior && prior.turns) || 0;
+    const turnsLeft = MAX_TURNS_PER_TICKET - turnsUsed;
+    const isFollowUp = withinWindow && turnsLeft > 0;
+
+    // Rolled over rather than refused. The customer keeps talking; it just costs
+    // the next ticket, and they are told before it is spent rather than after.
+    const rolledOver = withinWindow && turnsLeft <= 0;
+    if (rolledOver) {
+      log(`conversation for ${deviceId} hit ${MAX_TURNS_PER_TICKET} turns — starting a new ticket`);
+      conversations.delete(deviceId);
+    }
+
     const images = pendingImages.get(deviceId) || [];
     pendingImages.delete(deviceId);
 
-    ws.send(JSON.stringify({ type: 'ai_update', text: isFollowUp
-      ? 'Picking up where we left off…'
-      : 'Investigating your PC — this usually takes under a minute…' }));
+    ws.send(JSON.stringify({ type: 'ai_update', text: rolledOver
+      ? `That is ${MAX_TURNS_PER_TICKET} messages on this one — starting a fresh session, which uses another support ticket.`
+      : isFollowUp
+        ? 'Picking up where we left off…'
+        : 'Investigating your PC — this usually takes under a minute…' }));
 
     // Only re-snapshot at the start of a session; a follow-up already has context.
     let snapshot = null;
@@ -544,10 +572,24 @@ async function runTicket(ws, deviceId, ticket) {
       messages: result.messages || [],
       lastAt: Date.now(),
       opened: isFollowUp && prior ? prior.opened : new Date().toISOString(),
+      // Turns spent on the ticket this conversation belongs to. Resets with the
+      // conversation, which is what makes the cap per-ticket rather than global.
+      turns: (isFollowUp ? turnsUsed : 0) + 1,
       // Carried so follow-ups inherit the conversation's model rather than
       // silently escalating to the expensive one on every counter-question.
       model: routedModel,
     });
+
+    // Warn on the LAST turn, not after it. Being told "that used another
+    // ticket" once it is already spent is the kind of surprise a customer is
+    // right to be annoyed by.
+    const turnsNowUsed = (isFollowUp ? turnsUsed : 0) + 1;
+    if (turnsNowUsed >= MAX_TURNS_PER_TICKET) {
+      ws.send(JSON.stringify({
+        type: 'ai_message',
+        text: `That is the last message on this support ticket. If you need anything further, just ask — it starts a new session and uses one more ticket.`,
+      }));
+    }
 
     const durationSec = +((Date.now() - started) / 1000).toFixed(1);
     const declined = result.toolCalls.some(
