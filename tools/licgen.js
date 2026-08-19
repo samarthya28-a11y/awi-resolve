@@ -21,17 +21,21 @@ const PRIV = path.join(__dirname, 'licensing-key.pem');
 const PUB = path.join(__dirname, '..', 'orchestrator', 'licensing-key.pub');
 const PLANS = ['trial', 'incident', 'standard', 'pro', 'full'];
 
-// Default validity per plan. `incident` is the paid one-off pass: bounded by a
-// day rather than by "one session", because nothing in the licence model counts
-// sessions and selling something unenforceable is how a price list starts
-// lying.
-const DEFAULT_DAYS = { trial: 15, incident: 1 };
+// Default validity per plan, in days.
+//
+// For the pass this is the ACTIVATION DEADLINE, not the length of cover: the
+// 24-hour window starts when the customer first uses it (validForHours below),
+// so this is simply how long the key stays redeemable. Three months is long
+// enough that nobody loses what they paid for, short enough that keys do not
+// float around indefinitely.
+const DEFAULT_DAYS = { trial: 15, incident: 90 };
 
-// The 24-Hour Pass is a day's licence PLUS a small ticket allowance, so it runs
-// through the same ledger as everything else instead of being an unmetered
-// special case. Five separate problems in a day is generous — a follow-up
-// question does not spend a ticket, only a new conversation does.
+// The pass is a window of TIME that starts on first use, plus a small ticket
+// allowance, so it runs through the same ledger as everything else instead of
+// being an unmetered special case. Five separate problems in a day is generous
+// — a follow-up question does not spend a ticket, only a new conversation does.
 const PASS_TICKETS = 5;
+const PASS_HOURS = 24;
 
 function init() {
   if (fs.existsSync(PRIV)) {
@@ -68,6 +72,15 @@ function issue() {
   if (!Number.isFinite(seats) || seats < 1) { console.error('--seats must be a positive number'); process.exit(1); }
   if (!Number.isFinite(days) || days < 1) { console.error('--days must be a positive number'); process.exit(1); }
 
+  // Hours of cover once started. Present => the licence is time-boxed and its
+  // clock begins on first use, which is what makes expiresAt a deadline to
+  // redeem rather than the end of cover.
+  const validForHours = Number(arg('valid-for-hours', String(plan === 'incident' ? PASS_HOURS : 0)));
+  if (!Number.isFinite(validForHours) || validForHours < 0) {
+    console.error('--valid-for-hours must be zero or a positive number');
+    process.exit(1);
+  }
+
   const now = new Date();
   const expires = new Date(now.getTime() + days * 86400000);
   const payload = {
@@ -78,6 +91,7 @@ function issue() {
     seats,
     issuedAt: now.toISOString(),
     expiresAt: expires.toISOString(),
+    ...(validForHours > 0 ? { validForHours } : {}),
     ...(devices.length ? { deviceIds: devices } : {}),
   };
   if (!payload.customerId) delete payload.customerId;
@@ -96,7 +110,12 @@ function issue() {
   console.log(`Customer : ${customer}`);
   if (payload.customerId) console.log(`Org id   : ${payload.customerId}`);
   console.log(`Plan     : ${plan}   Seats: ${seats}`);
-  console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
+  if (validForHours > 0) {
+    console.log(`Cover    : ${validForHours} hours, starting when the customer first uses it`);
+    console.log(`Redeem by: ${expires.toISOString().slice(0, 10)}  (${days} days to start it)`);
+  } else {
+    console.log(`Expires  : ${expires.toISOString().slice(0, 10)}  (${days} days)`);
+  }
   if (devices.length) console.log(`Devices  : ${devices.join(', ')}`);
 
   // Credit tickets at issue time so the licence works the moment the key is

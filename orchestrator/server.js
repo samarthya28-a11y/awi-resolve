@@ -11,11 +11,15 @@ const { WebSocketServer } = require('ws');
 const { diagnose, MODEL, pickModel, resolveOrchestratorTool } = require('./ai');
 const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
-const { evaluate: evaluateLicense } = require('./licensing');
+const { evaluate: evaluateLicense, beginIfTimeBoxed } = require('./licensing');
 const orgLibrary = require('./org-library');
 
 // deviceId -> licence evaluation, consulted before any tool that changes the PC.
 const deviceLicenses = new Map();
+// deviceId -> the raw key. Kept because a time-boxed pass has to be re-evaluated
+// once its clock starts: the evaluation cached at enrollment was made before the
+// window existed, so its expiry would be stale for the rest of the connection.
+const deviceLicenseKeys = new Map();
 // deviceId -> customer org id (slug) for the IT-admin software library.
 const deviceCustomers = new Map();
 // customerId -> seats sold on that org's licence, for advisory seat reporting.
@@ -393,6 +397,26 @@ async function runTicket(ws, deviceId, ticket) {
     // people for the product behaving well, and it is the kind of surprise a
     // customer only discovers from their balance. The continuation is already
     // paid for, so a follow-up neither checks the balance nor spends again.
+    // This is "first use" for a time-boxed pass: a real request, not the
+    // enrollment handshake. A follow-up inside an existing conversation is not a
+    // fresh start either — and the call is idempotent, so it can never restart a
+    // window that is already running.
+    const rawKey = deviceLicenseKeys.get(deviceId);
+    if (rawKey && !isFollowUp) {
+      const begun = beginIfTimeBoxed(rawKey, deviceId);
+      if (begun.started && begun.isNew) {
+        // Refresh the cached evaluation: the one made at enrollment predates the
+        // window, so its expiry would be stale for the rest of this connection.
+        deviceLicenses.set(deviceId, evaluateLicense(rawKey, deviceId));
+        log(`pass activated for ${deviceId}: ${begun.validForHours}h from ${begun.startedAt}`);
+        audit({
+          event: 'pass_activated', deviceId, customerId,
+          licenseId: begun.licenseId, validForHours: begun.validForHours,
+          startedAt: begun.startedAt,
+        });
+      }
+    }
+
     const gate = (customerId && !isFollowUp)
       ? ledger.canOpen(customerId, deviceId)
       : { allowed: true, metered: false, continuation: isFollowUp };
@@ -898,6 +922,10 @@ wss.on('connection', (ws) => {
       // wrong — but consent-gated fixes and deployment are withheld.
       const lic = evaluateLicense(msg.licenseKey, deviceId);
       deviceLicenses.set(deviceId, lic);
+      // Enrollment deliberately does NOT start a time-boxed pass. Installing the
+      // agent and pasting a key is setup, not support — the clock starts on the
+      // first actual request, at the ticket gate.
+      if (msg.licenseKey) deviceLicenseKeys.set(deviceId, msg.licenseKey);
       // Remember which organisation this PC belongs to. The customer console
       // scopes on it, and it has to survive a restart — deviceLicenses is only
       // in memory and only covers currently-connected machines.
@@ -1021,6 +1049,11 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    if (deviceId) log(`device ${deviceId} disconnected`);
+    if (deviceId) {
+      log(`device ${deviceId} disconnected`);
+      // Drop the cached key. The activation record itself is on disk, so a
+      // reconnect resumes the same window rather than starting a new one.
+      deviceLicenseKeys.delete(deviceId);
+    }
   });
 });
