@@ -802,6 +802,29 @@ const httpServer = http.createServer(async (req, res) => {
     }
   }
 
+  // Every organisation and its balance. Alpha Web's dashboard token only —
+  // this crosses customers by definition.
+  if (route === '/api/admin/customers' && req.method === 'GET') {
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!DASHBOARD_TOKEN || !tokenOk(supplied)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    const orgs = ledger.listOrgs();
+    // Fold in how many PCs each org has enrolled, which is the number that
+    // makes a balance meaningful.
+    const devices = loadDevices();
+    const pcCount = {};
+    for (const d of Object.values(devices)) {
+      if (d && d.customerId) pcCount[d.customerId] = (pcCount[d.customerId] || 0) + 1;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({
+      customers: orgs.map((o) => ({ ...o, pcs: pcCount[o.customerId] || 0 })),
+    }));
+  }
+
   // Issue a licence. Alpha Web's dashboard token only.
   //
   // Lives here rather than on the website because this is where the signing key

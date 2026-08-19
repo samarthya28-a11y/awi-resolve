@@ -298,8 +298,34 @@ function summary(customerId, at = new Date()) {
   };
 }
 
+/**
+ * Every organisation with a ledger, newest activity first.
+ *
+ * ALPHA WEB INTERNAL — this crosses customers by definition, so it must only
+ * ever be reachable with the dashboard token, never an org token.
+ */
+function listOrgs(at = new Date()) {
+  const all = load();
+  return Object.keys(all)
+    .map((id) => {
+      const s = summary(id, at);
+      const entries = all[id].entries || [];
+      const last = entries.length ? entries[entries.length - 1] : null;
+      return {
+        customerId: id,
+        balance: s.balance,
+        purchased: all[id].purchased || 0,
+        used: all[id].used || 0,
+        usedThisPeriod: s.usedThisPeriod,
+        nextExpiry: s.nextExpiry || null,
+        lastActivity: last ? last.at || null : null,
+      };
+    })
+    .sort((a, b) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
+}
+
 module.exports = {
-  canOpen, debit, credit, setQuota, setGroup, summary,
+  canOpen, debit, credit, setQuota, setGroup, summary, listOrgs,
   parentOf, billingOrg, isChildOf, ORG_SEPARATOR,
   balanceOf, period, OVERDRAFT_TICKETS,
 };
