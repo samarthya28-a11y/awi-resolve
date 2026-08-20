@@ -183,6 +183,7 @@ function handle(m) {
     case 'ai_message': clearStatus(); el('msg ai', m.text); break;
     case 'action': { clearStatus(); const d = el('action'); d.innerHTML = '<span class="tick">✓</span> ' + m.text; break; }
     case 'consent': clearStatus(); renderConsent(m); break;
+    case 'cost_approval': clearStatus(); renderCostApproval(m); break;
     case 'selfcheck': clearStatus(); renderSelfCheck(m.result); break;
     case 'telemetry_ask': renderTelemetryAsk(); break;
     case 'telemetry_set':
@@ -200,6 +201,25 @@ function renderConsent(m) {
   c.querySelector('.q').textContent = m.prompt;
   c.querySelector('.ok').onclick = () => answer(c, m.consentId, 'accepted');
   c.querySelector('.no').onclick = () => answer(c, m.consentId, 'declined');
+}
+
+// Approving another support ticket. Same shape as a consent prompt — the
+// customer is agreeing to something either way — but the buttons name the
+// cost rather than saying "yes", because what is being agreed to is a charge.
+function renderCostApproval(m) {
+  const c = el('consent');
+  c.innerHTML = '<div class="q"></div><div class="btns">'
+    + '<button class="ok">Continue — use another ticket</button>'
+    + '<button class="no">Stop here</button></div>';
+  c.querySelector('.q').textContent = m.prompt;
+  c.querySelector('.ok').onclick = () => {
+    ws.send(JSON.stringify({ type: 'cost_approval_response', approvalId: m.approvalId, decision: 'accepted' }));
+    c.querySelector('.btns').innerHTML = '<span class="answered">Continuing…</span>';
+  };
+  c.querySelector('.no').onclick = () => {
+    ws.send(JSON.stringify({ type: 'cost_approval_response', approvalId: m.approvalId, decision: 'declined' }));
+    c.querySelector('.btns').innerHTML = '<span class="answered">Stopped — nothing further charged.</span>';
+  };
 }
 // Offline findings. Presented as observations with suggestions, never as a
 // verdict — offline this is a short checklist, not the AI technician, and the

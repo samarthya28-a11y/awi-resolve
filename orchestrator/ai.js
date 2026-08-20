@@ -478,6 +478,10 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
                           resolveCloudTool = null,
                           fullItSupport = false,
                           model = null,
+                          // Called between steps with the real spend so far.
+                          // Return 'stop' to end the session cleanly, anything
+                          // else to carry on. Null disables the gate entirely.
+                          onCostGate = null,
                           onStep = () => {}, onUpdate = () => {} }) {
   const client = new Anthropic({ apiKey });
   // Route before anything else — the choice drives cost, cache behaviour and
@@ -559,6 +563,35 @@ async function diagnose({ apiKey, ticket, snapshot, callTool, manuals = [],
     }
     recordCacheUsage(response.usage);
     messages.push({ role: 'assistant', content: response.content });
+
+    // Cost gate. A prepaid ticket is a promise to absorb whatever one session
+    // costs, and a few sessions cost far more than the rest — a long deployment
+    // on Full IT Support with documentation attached runs to many times a
+    // ticket's price.
+    //
+    // Rather than absorb that quietly or refuse the work, ask. The customer is
+    // told what it will take in tickets and decides. Checked AFTER the response
+    // so the figure quoted is real spend rather than a guess, and only between
+    // steps so a tool call is never abandoned half-finished.
+    if (onCostGate) {
+      const soFar = usageSummary();
+      const verdict = await onCostGate({
+        spentUsd: soFar ? soFar.estimatedUsd : 0,
+        step: step + 1,
+        model: chosenModel,
+      });
+      if (verdict === 'stop') {
+        return {
+          report: 'DIAGNOSIS: Stopped at your request before the work was finished.\n'
+            + 'FIX: Nothing further was attempted.\n'
+            + 'OUTCOME: Paused. Everything found so far is in this session above.\n'
+            + 'NOT DONE: The rest of the investigation — start a new session when you want to continue.\n'
+            + 'CONFIDENCE: n/a.\nESCALATE: no',
+          escalate: false, toolCalls, steps: step + 1, stopReason: 'cost_declined',
+          usage: usageSummary(), messages,
+        };
+      }
+    }
 
     // Relay the model's running narration to the customer window.
     const narration = response.content.filter((b) => b.type === 'text').map((b) => b.text).join(' ').trim();

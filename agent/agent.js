@@ -126,6 +126,15 @@ function startUiServer() {
     if (!consent.decided) client.send(JSON.stringify({ type: 'telemetry_ask' }));
     client.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+      if (m.type === 'cost_approval_response') {
+        // Passed straight through: the orchestrator is the only side that knows
+        // what was asked and the only side that can charge for it.
+        if (orchWs && orchWs.readyState === WebSocket.OPEN) {
+          orchWs.send(JSON.stringify({ type: 'cost_approval_response',
+            approvalId: m.approvalId, decision: m.decision }));
+        }
+        return;
+      }
       if (m.type === 'activate_licence') {
         // Save a pasted licence key and reconnect so the orchestrator
         // re-evaluates it. The agent does NOT judge whether the key is valid —
@@ -437,6 +446,14 @@ function connect(identity) {
         break;
       case 'auth_failed': log('AUTH FAILED — identity rejected, not retrying'); ws.close(); process.exit(1); break;
       case 'tool_call': handleToolCall(ws, msg); break;
+      // The orchestrator wants the customer to approve spending another ticket.
+      // Shown through the same prompt as a tool consent — the customer is being
+      // asked to agree to something either way, and one pattern is enough to
+      // learn.
+      case 'cost_approval':
+        toUI({ type: 'cost_approval', approvalId: msg.approvalId, prompt: msg.prompt,
+               ticketsUsed: msg.ticketsUsed });
+        break;
       // Progress + results the orchestrator streams for the customer UI:
       case 'ai_update': toUI({ type: 'status', text: msg.text }); break;
       case 'ai_message': toUI({ type: 'ai_message', text: msg.text }); break;

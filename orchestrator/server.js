@@ -436,6 +436,52 @@ const MAX_TURNS_PER_TICKET = 5;
 // guide, cheap enough to re-read, and far below anything that breaks a session.
 const MANUAL_CHAR_LIMIT = 80000;
 const MANUAL_TOTAL_CHARS = 80000;
+
+// What one ticket buys, in API spend.
+//
+// A typical session costs around Rs 2, so this is generous by a factor of
+// twenty and no ordinary ticket will ever reach it. It exists for the rare
+// session — a long deployment on Full IT Support with documentation attached —
+// that would otherwise cost multiples of what the ticket was sold for.
+//
+// At that point the customer is asked rather than the loss absorbed or the work
+// refused: "this is bigger than one ticket, shall I carry on?" Set below the
+// Rs 69 ticket price so an approved extension still carries margin.
+// Overridable so the gate can be exercised without spending Rs 40 of tokens to
+// reach it — a control this important should be testable for pennies.
+const TICKET_BUDGET_INR = Number(process.env.RESOLVE_TICKET_BUDGET_INR) || 40;
+const USD_TO_INR = Number(process.env.RESOLVE_USD_INR) || 88;
+
+// deviceId -> resolve(), for a cost approval the customer has not answered yet.
+const pendingCostApprovals = new Map();
+const COST_APPROVAL_TIMEOUT_MS = 90000;
+
+/**
+ * Ask the customer to approve spending another ticket, and wait.
+ *
+ * A timeout counts as "no". Charging for work somebody walked away from is
+ * exactly the surprise that makes a prepaid model feel like a trap.
+ */
+function requestCostApproval(ws, deviceId, { ticketsUsed, spentInr }) {
+  return new Promise((resolve) => {
+    const approvalId = crypto.randomUUID();
+    pendingCostApprovals.set(approvalId, resolve);
+    ws.send(JSON.stringify({
+      type: 'cost_approval',
+      approvalId,
+      ticketsUsed,
+      spentInr: Math.round(spentInr),
+      prompt:
+        `This one is bigger than a single support ticket covers — it has already taken `
+        + `${ticketsUsed === 1 ? 'a full ticket' : `${ticketsUsed} tickets`} of work.\n\n`
+        + `Shall I keep going? Continuing will use one more support ticket. `
+        + `If you would rather stop, I will write up everything found so far and nothing further is charged.`,
+    }));
+    setTimeout(() => {
+      if (pendingCostApprovals.delete(approvalId)) resolve('timeout');
+    }, COST_APPROVAL_TIMEOUT_MS);
+  });
+}
 // Screenshots/images attached but not yet handed to the AI.
 const pendingImages = new Map();   // deviceId -> [{mediaType, data}]
 
@@ -554,6 +600,11 @@ async function runTicket(ws, deviceId, ticket) {
     const gate = (customerId && !isFollowUp)
       ? ledger.canOpen(customerId, deviceId)
       : { allowed: true, metered: false, continuation: isFollowUp };
+
+    // Extra tickets the customer has agreed to on THIS message, beyond the one
+    // the session already spends. Reset per message so approving a long job
+    // does not quietly raise the bar for the next question.
+    let extraTicketsApproved = 0;
     if (!gate.allowed) {
       log(`ticket refused for ${customerId}/${deviceId}: out of tickets or over quota`);
       audit({ event: 'ticket_refused_no_credit', deviceId, customerId });
@@ -589,6 +640,48 @@ async function runTicket(ws, deviceId, ticket) {
       images,
       resolveCloudTool: (name, input) => resolveCloudTool(ws, deviceId, customerId, name, input),
       fullItSupport,
+      // Only metered customers can be asked to spend another ticket — an
+      // unmetered licence has none to spend, so the prompt would have no
+      // meaningful answer.
+      //
+      // Asked of the LEDGER, not of `gate`. gate.metered is only true on the
+      // message that opens a ticket, so keying on it left every follow-up
+      // ungated — and follow-ups are the expensive ones, since each carries the
+      // whole conversation before it.
+      onCostGate: (customerId && ledger.summary(customerId).metered) ? async ({ spentUsd }) => {
+        const spentInr = spentUsd * USD_TO_INR;
+        const shouldHave = Math.ceil(spentInr / TICKET_BUDGET_INR);
+        if (shouldHave <= extraTicketsApproved + 1) return 'continue';
+
+        ws.send(JSON.stringify({ type: 'ai_update',
+          text: 'This is turning into more work than one ticket covers — checking with you…' }));
+        const decision = await requestCostApproval(ws, deviceId, {
+          ticketsUsed: extraTicketsApproved + 1, spentInr,
+        });
+
+        if (decision !== 'accepted') {
+          log(`cost approval ${decision} for ${customerId} after ₹${spentInr.toFixed(0)}`);
+          audit({ event: 'cost_approval_declined', deviceId, customerId,
+                  decision, spentInr: Math.round(spentInr) });
+          ws.send(JSON.stringify({ type: 'ai_message', text: decision === 'timeout'
+            ? 'I did not hear back, so I have stopped there. Nothing further has been charged — everything found so far is above.'
+            : 'Stopped. Nothing further has been charged, and everything found so far is above.' }));
+          return 'stop';
+        }
+
+        // Approved: charge now, so what the customer agreed to and what they
+        // are billed cannot drift apart if the session later fails.
+        extraTicketsApproved++;
+        const out = ledger.debit(customerId, deviceId, { reportId: null, didWork: true });
+        log(`extra ticket approved by ${customerId} — ${out.balance} left`);
+        audit({ event: 'extra_ticket_approved', deviceId, customerId,
+                ticketsUsed: extraTicketsApproved + 1, balance: out.balance,
+                spentInr: Math.round(spentInr) });
+        ws.send(JSON.stringify({ type: 'ai_message',
+          text: `Thank you — carrying on. That is ${extraTicketsApproved + 1} tickets on this job so far`
+            + `${out.balance != null ? `, and you have ${out.balance} left` : ''}.` }));
+        return 'continue';
+      } : null,
       model: routedModel,   // decided once, above — logged and run are the same
       onStep: (phase, detail) => log(`  AI ${phase}: ${detail}`),
       onUpdate: (text) => ws.send(JSON.stringify({ type: 'ai_message', text })),
@@ -1317,6 +1410,14 @@ wss.on('connection', (ws) => {
         audit({ event: 'posture_report', deviceId, hostname: msg.hostname });
         log(`posture report from ${msg.hostname || deviceId}`);
       } catch (e) { log(`posture record failed: ${e.message}`); }
+    }
+
+    if (msg.type === 'cost_approval_response') {
+      const resolve = pendingCostApprovals.get(msg.approvalId);
+      if (resolve) {
+        pendingCostApprovals.delete(msg.approvalId);
+        resolve(msg.decision === 'accepted' ? 'accepted' : 'declined');
+      }
     }
 
     // Screenshot from the customer — queued for the next message to the AI.
