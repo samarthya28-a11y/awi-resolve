@@ -27,6 +27,7 @@ if (!process.env.RESOLVE_DATA_DIR) {
   process.exit(1);
 }
 const ledger = require('../orchestrator/ledger');
+const GRANT = Number(process.env.RESOLVE_EXTRA_TICKET_GRANT) || 3;
 
 let fail = 0;
 const check = (label, cond, detail = '') => {
@@ -85,8 +86,12 @@ const check = (label, cond, detail = '') => {
   console.log(`\n  balance after: ${after}  (spent ${spent})\n`);
 
   check('the customer was asked before extra spend', seen.asks > 0, `${seen.asks} time(s)`);
-  check('the prompt says another ticket will be used', /one more support ticket/i.test(seen.prompt),
-    'they must know what they are agreeing to');
+  check('the prompt states a CEILING, not a single ticket',
+    /up to \d+ more support ticket/i.test(seen.prompt),
+    'one prompt should authorise a block, not one ticket at a time');
+  check('and says they only pay for what is used',
+    /only charged for the ones it actually uses/i.test(seen.prompt),
+    'a ceiling that reads as a price would put people off approving anything');
   check('and offers to stop with nothing further charged', /nothing further is charged/i.test(seen.prompt));
 
   if (mode === 'accept') {
@@ -94,9 +99,15 @@ const check = (label, cond, detail = '') => {
     // The invariant: one ticket for the session, plus exactly one per approval.
     // Never more — that would be charging for something not agreed to.
     const sessionTicket = seen.followUp ? 0 : 1;
-    check('charged exactly once per approval, plus the session if it opened one',
-      spent === sessionTicket + seen.approvals,
-      `${seen.approvals} approval(s) + ${sessionTicket} session = expected ${sessionTicket + seen.approvals}, spent ${spent}`);
+    // With a block grant, one approval covers several tickets — so the test is
+    // no longer "one charge per approval" but "never more than authorised".
+    const ceiling = seen.approvals * GRANT;
+    check('one approval covered several tickets',
+      seen.approvals < spent - sessionTicket || spent - sessionTicket === 0 || seen.approvals === 1,
+      `${seen.approvals} approval(s) covered ${spent - sessionTicket} extra ticket(s)`);
+    check('never charged beyond what was authorised',
+      spent - sessionTicket <= ceiling,
+      `${spent - sessionTicket} extra charged against a ceiling of ${ceiling}`);
     check('the customer was told a running total',
       /\d+ tickets on this job/.test(seen.charged), seen.charged.slice(0, 62));
   } else {

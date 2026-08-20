@@ -208,8 +208,9 @@ function renderConsent(m) {
 // cost rather than saying "yes", because what is being agreed to is a charge.
 function renderCostApproval(m) {
   const c = el('consent');
+  const grant = Number(m.grant) || 1;
   c.innerHTML = '<div class="q"></div><div class="btns">'
-    + '<button class="ok">Continue — use another ticket</button>'
+    + '<button class="ok">Continue — up to ' + grant + ' more ticket' + (grant === 1 ? '' : 's') + '</button>'
     + '<button class="no">Stop here</button></div>';
   c.querySelector('.q').textContent = m.prompt;
   c.querySelector('.ok').onclick = () => {

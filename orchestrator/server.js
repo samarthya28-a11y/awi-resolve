@@ -450,6 +450,16 @@ const MANUAL_TOTAL_CHARS = 80000;
 // Overridable so the gate can be exercised without spending Rs 40 of tokens to
 // reach it — a control this important should be testable for pennies.
 const TICKET_BUDGET_INR = Number(process.env.RESOLVE_TICKET_BUDGET_INR) || 40;
+
+// How many extra tickets one approval authorises.
+//
+// A ceiling, not a price: only tickets the session actually reaches are
+// charged, so approving three and finishing after one costs one. Asking per
+// ticket instead would be maximally transparent and maximally irritating — five
+// prompts in a session reads as nickel-and-diming even when every one is
+// honest. It also makes the design robust to TICKET_BUDGET_INR being set too
+// low, which matters while there is barely any real usage to calibrate against.
+const EXTRA_TICKET_GRANT = Number(process.env.RESOLVE_EXTRA_TICKET_GRANT) || 3;
 const USD_TO_INR = Number(process.env.RESOLVE_USD_INR) || 88;
 
 // deviceId -> resolve(), for a cost approval the customer has not answered yet.
@@ -462,7 +472,7 @@ const COST_APPROVAL_TIMEOUT_MS = 90000;
  * A timeout counts as "no". Charging for work somebody walked away from is
  * exactly the surprise that makes a prepaid model feel like a trap.
  */
-function requestCostApproval(ws, deviceId, { ticketsUsed, spentInr }) {
+function requestCostApproval(ws, deviceId, { ticketsUsed, grant, spentInr }) {
   return new Promise((resolve) => {
     const approvalId = crypto.randomUUID();
     pendingCostApprovals.set(approvalId, resolve);
@@ -470,11 +480,15 @@ function requestCostApproval(ws, deviceId, { ticketsUsed, spentInr }) {
       type: 'cost_approval',
       approvalId,
       ticketsUsed,
+      grant,
       spentInr: Math.round(spentInr),
+      // "Up to" is the important phrase. It is a ceiling being authorised, not
+      // a price being quoted, and only tickets actually reached are charged.
       prompt:
         `This one is bigger than a single support ticket covers — it has already taken `
         + `${ticketsUsed === 1 ? 'a full ticket' : `${ticketsUsed} tickets`} of work.\n\n`
-        + `Shall I keep going? Continuing will use one more support ticket. `
+        + `Shall I keep going? It may take up to ${grant} more support ticket${grant === 1 ? '' : 's'}, `
+        + `and you are only charged for the ones it actually uses — if it finishes sooner, you pay less.\n\n`
         + `If you would rather stop, I will write up everything found so far and nothing further is charged.`,
     }));
     setTimeout(() => {
@@ -601,10 +615,11 @@ async function runTicket(ws, deviceId, ticket) {
       ? ledger.canOpen(customerId, deviceId)
       : { allowed: true, metered: false, continuation: isFollowUp };
 
-    // Extra tickets the customer has agreed to on THIS message, beyond the one
-    // the session already spends. Reset per message so approving a long job
-    // does not quietly raise the bar for the next question.
-    let extraTicketsApproved = 0;
+    // Extra tickets charged on THIS message beyond the one the session spends,
+    // and the ceiling the customer has authorised. Both reset per message, so
+    // approving a long job never quietly raises the bar for the next question.
+    let extraTicketsCharged = 0;
+    let approvedCeiling = 0;
     if (!gate.allowed) {
       log(`ticket refused for ${customerId}/${deviceId}: out of tickets or over quota`);
       audit({ event: 'ticket_refused_no_credit', deviceId, customerId });
@@ -650,36 +665,57 @@ async function runTicket(ws, deviceId, ticket) {
       // whole conversation before it.
       onCostGate: (customerId && ledger.summary(customerId).metered) ? async ({ spentUsd }) => {
         const spentInr = spentUsd * USD_TO_INR;
-        const shouldHave = Math.ceil(spentInr / TICKET_BUDGET_INR);
-        if (shouldHave <= extraTicketsApproved + 1) return 'continue';
+        // Extra tickets this session has earned beyond the one it already spent.
+        const owed = Math.ceil(spentInr / TICKET_BUDGET_INR) - 1;
+        if (owed <= extraTicketsCharged) return 'continue';
 
-        ws.send(JSON.stringify({ type: 'ai_update',
-          text: 'This is turning into more work than one ticket covers — checking with you…' }));
-        const decision = await requestCostApproval(ws, deviceId, {
-          ticketsUsed: extraTicketsApproved + 1, spentInr,
-        });
+        // Out of authorisation — ask for another block. Asked once per BLOCK,
+        // not once per ticket: a tradesman says "about three hours", not "shall
+        // I do another minute?" every minute. The customer also sees the scale
+        // of the job up front instead of discovering it four prompts deep.
+        if (extraTicketsCharged >= approvedCeiling) {
+          ws.send(JSON.stringify({ type: 'ai_update',
+            text: 'This is turning into more work than one ticket covers — checking with you…' }));
+          const decision = await requestCostApproval(ws, deviceId, {
+            ticketsUsed: extraTicketsCharged + 1,
+            grant: EXTRA_TICKET_GRANT,
+            spentInr,
+          });
 
-        if (decision !== 'accepted') {
-          log(`cost approval ${decision} for ${customerId} after ₹${spentInr.toFixed(0)}`);
-          audit({ event: 'cost_approval_declined', deviceId, customerId,
-                  decision, spentInr: Math.round(spentInr) });
-          ws.send(JSON.stringify({ type: 'ai_message', text: decision === 'timeout'
-            ? 'I did not hear back, so I have stopped there. Nothing further has been charged — everything found so far is above.'
-            : 'Stopped. Nothing further has been charged, and everything found so far is above.' }));
-          return 'stop';
+          if (decision !== 'accepted') {
+            log(`cost approval ${decision} for ${customerId} after ₹${spentInr.toFixed(0)}`);
+            audit({ event: 'cost_approval_declined', deviceId, customerId,
+                    decision, spentInr: Math.round(spentInr) });
+            ws.send(JSON.stringify({ type: 'ai_message', text: decision === 'timeout'
+              ? 'I did not hear back, so I have stopped there. Nothing further has been charged — everything found so far is above.'
+              : 'Stopped. Nothing further has been charged, and everything found so far is above.' }));
+            return 'stop';
+          }
+          approvedCeiling += EXTRA_TICKET_GRANT;
+          audit({ event: 'cost_approval_granted', deviceId, customerId,
+                  grant: EXTRA_TICKET_GRANT, ceiling: approvedCeiling,
+                  spentInr: Math.round(spentInr) });
         }
 
-        // Approved: charge now, so what the customer agreed to and what they
-        // are billed cannot drift apart if the session later fails.
-        extraTicketsApproved++;
+        // Charge one ticket, now — so what was agreed to and what is billed
+        // cannot drift apart if the session later fails. Only tickets actually
+        // reached are charged: authorising three and finishing after one costs
+        // one, which is the difference between a ceiling and a price.
+        extraTicketsCharged++;
         const out = ledger.debit(customerId, deviceId, { reportId: null, didWork: true });
-        log(`extra ticket approved by ${customerId} — ${out.balance} left`);
-        audit({ event: 'extra_ticket_approved', deviceId, customerId,
-                ticketsUsed: extraTicketsApproved + 1, balance: out.balance,
+        const used = extraTicketsCharged + 1;
+        const remainingGrant = approvedCeiling - extraTicketsCharged;
+        log(`extra ticket ${used} charged for ${customerId} — ${out.balance} left, `
+          + `${remainingGrant} of the approved block unused`);
+        audit({ event: 'extra_ticket_charged', deviceId, customerId,
+                ticketsUsed: used, balance: out.balance, ceiling: approvedCeiling,
                 spentInr: Math.round(spentInr) });
         ws.send(JSON.stringify({ type: 'ai_message',
-          text: `Thank you — carrying on. That is ${extraTicketsApproved + 1} tickets on this job so far`
-            + `${out.balance != null ? `, and you have ${out.balance} left` : ''}.` }));
+          text: `That is ${used} tickets on this job so far`
+            + `${out.balance != null ? `, and you have ${out.balance} left` : ''}.`
+            + (remainingGrant > 0
+              ? ` I will carry on within the ${approvedCeiling} you approved and check with you again if it needs more.`
+              : '') }));
         return 'continue';
       } : null,
       model: routedModel,   // decided once, above — logged and run are the same
