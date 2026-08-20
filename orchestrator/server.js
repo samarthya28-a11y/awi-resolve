@@ -13,6 +13,7 @@ const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
 const { evaluate: evaluateLicense, beginIfTimeBoxed, PLANS: LICENCE_PLANS } = require('./licensing');
 const licenceIssue = require('./licence-issue');
+const alerts = require('./alerts');
 const microsoft = require('./microsoft');
 const orgLibrary = require('./org-library');
 
@@ -521,6 +522,14 @@ async function runTicket(ws, deviceId, ticket) {
           licenseId: begun.licenseId, validForHours: begun.validForHours,
           startedAt: begun.startedAt,
         });
+        // The clock just started and the window is short. Never awaited — an
+        // alert must not delay or break the customer's session.
+        const licNow = deviceLicenses.get(deviceId);
+        alerts.activated({
+          customer: (licNow && licNow.customer) || customerId,
+          customerId, validForHours: begun.validForHours,
+          startedAt: begun.startedAt, deviceId,
+        }).then((r) => { if (!r.ok) log(`activation alert not sent: ${r.why || r.status}`); });
       }
     }
 
@@ -653,6 +662,11 @@ async function runTicket(ws, deviceId, ticket) {
       log(didWork
         ? `ticket debited — ${spent.balance} ticket(s) left for ${customerId}`
         : `ticket NOT billed (session did nothing) — ${spent.balance} left for ${customerId}`);
+      // Out of tickets. Reported once per org, not on every refusal afterwards.
+      if (spent.balance <= 0) {
+        alerts.exhausted({ customerId, balance: spent.balance })
+          .then((r) => { if (!r.ok && !r.skipped) log(`exhausted alert not sent: ${r.why || r.status}`); });
+      }
     }
 
     if (escalated) {
@@ -663,6 +677,11 @@ async function runTicket(ws, deviceId, ticket) {
         toolCalls: result.toolCalls, handoff: result.report,
       }, null, 2));
       log(`ticket escalated — handoff written to ${ESCALATION_FILE}`);
+      // The one session worth reading: either a gap we should close, or a job
+      // that genuinely needed a person. Knowing which is how the escalation
+      // rate comes down.
+      alerts.escalated({ customerId, deviceId, ticket, reportId, report: result.report })
+        .then((r) => { if (!r.ok) log(`escalation alert not sent: ${r.why || r.status}`); });
     }
 
     // Support tickets end with the structured DIAGNOSIS/FIX report card; deployment
@@ -907,6 +926,9 @@ const httpServer = http.createServer(async (req, res) => {
       const cid = orgLibrary.slugify(body.customerId || '');
       if (!cid) throw new Error('customerId required');
       const out = ledger.credit(cid, body.tickets, { note: body.note || 'top-up' });
+      // Re-arm the out-of-tickets alert: having been topped up, running dry
+      // again is news once more.
+      alerts.clearExhausted(cid);
       audit({ event: 'tickets_sold', customerId: cid, tickets: body.tickets, balance: out.balance });
       log(`sold ${body.tickets} ticket(s) to ${cid} — balance now ${out.balance}`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1031,6 +1053,7 @@ const httpServer = http.createServer(async (req, res) => {
       if (tickets > 0) {
         if (!customerId) throw new Error('customerId is required to credit tickets');
         const out = ledger.credit(customerId, tickets, { note: `${payload.plan} licence` });
+        alerts.clearExhausted(customerId);
         balance = out.balance;
         log(`issued ${payload.plan} licence to ${payload.customer} [${customerId}] with ${tickets} ticket(s) — balance ${balance}`);
       } else {
