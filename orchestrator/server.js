@@ -14,6 +14,7 @@ const customerConsole = require('./console');
 const { evaluate: evaluateLicense, beginIfTimeBoxed, PLANS: LICENCE_PLANS } = require('./licensing');
 const licenceIssue = require('./licence-issue');
 const alerts = require('./alerts');
+const { performance } = require('./performance');
 const microsoft = require('./microsoft');
 const orgLibrary = require('./org-library');
 
@@ -937,6 +938,20 @@ const httpServer = http.createServer(async (req, res) => {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: e.message }));
     }
+  }
+
+  // How Resolve is performing across every customer. Dashboard token only.
+  if (route === '/api/admin/performance' && req.method === 'GET') {
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!DASHBOARD_TOKEN || !tokenOk(supplied)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 30, 1), 365);
+    const usdToInr = Number(url.searchParams.get('usd')) || 88;
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify(performance({ days, usdToInr })));
   }
 
   // Every organisation and its balance. Alpha Web's dashboard token only —
