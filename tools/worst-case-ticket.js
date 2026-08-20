@@ -66,7 +66,9 @@ const TYPICAL_TOOL   = 900;   // most tool results are small; 3000 is the cap
 // scenarios do not bill a fortune, they FAIL. That is a bad customer
 // experience and a support call, but it is not an unbounded invoice, and
 // confusing the two would misprice the risk badly.
-const CONTEXT_WINDOW = 200000;
+// --no-window lifts it, purely to answer "what would that have cost?" — the
+// answer is interesting for calibrating how much the window is protecting us.
+const CONTEXT_WINDOW = process.argv.includes('--no-window') ? Infinity : 200000;
 
 const manualTokens = Math.round(MANUAL_CHARS / CHARS_PER_TOKEN);
 const toolTokens = Math.round(TOOL_CAP / CHARS_PER_TOKEN);
