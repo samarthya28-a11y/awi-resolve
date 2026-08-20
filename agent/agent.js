@@ -48,6 +48,16 @@ let LICENSE_KEY = process.env.RESOLVE_LICENSE_KEY || CONFIG.licenseKey || '';
 // The orchestrator's last word on this machine's licence. Held so a window
 // opened long after startup still learns whether it needs activating.
 let lastLicenceState = null;
+
+// How much of a document the technician will read, in characters.
+//
+// A manual goes into the conversation and is then re-read on every subsequent
+// step, so a large one is charged many times over. At 500,000 characters — the
+// old limit — a single attachment was ~125,000 tokens and could exhaust the
+// model's context window outright, which showed up as a session that simply
+// failed. 80,000 is roughly thirty pages: enough for a real installation guide,
+// and small enough that attaching one cannot break the session.
+const MANUAL_CHAR_LIMIT = 80000;
 const CUSTOMER_ID = process.env.RESOLVE_CUSTOMER_ID || CONFIG.customerId || '';
 const AGENT_VERSION = '0.3.0';
 const CONSENT_TIMEOUT_MS = 60000; // spec §7: timeout is treated as declined
@@ -204,9 +214,21 @@ function startUiServer() {
             } else {
               text = String(m.text || '');
             }
-            text = text.slice(0, 500000);
-            if (!text.trim()) {
+            text = text.trim();
+            if (!text) {
               toUI({ type: 'status', text: 'That file looked empty — please try another.' });
+              return;
+            }
+            // Refused, not truncated. A silently halved manual is worse than no
+            // manual: the technician reads the first half, does not find the
+            // relevant step, and answers confidently from an incomplete
+            // document. Better to say so and let the customer send the part
+            // that matters.
+            if (text.length > MANUAL_CHAR_LIMIT) {
+              toUI({ type: 'status', text:
+                `"${title}" is about ${Math.round(text.length / 1000)}k characters — too long to read in one go ` +
+                `(the limit is ${Math.round(MANUAL_CHAR_LIMIT / 1000)}k, roughly 30 pages). ` +
+                `Please attach just the section that covers this problem, or paste the relevant steps.` });
               return;
             }
             if (orchWs && orchWs.readyState === WebSocket.OPEN) {

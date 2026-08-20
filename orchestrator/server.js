@@ -419,6 +419,23 @@ const CONVERSATION_TTL_MS = 60 * 60 * 1000;   // an hour of quiet = new session
 // clarifications, confirm — and nobody is cut off: the next message simply
 // starts a new ticket, which is said plainly before it happens.
 const MAX_TURNS_PER_TICKET = 5;
+
+// How much attached documentation one conversation will carry, in characters.
+//
+// A manual enters the conversation and is then re-read on every subsequent
+// step, so it is charged many times over — on the worst modelled session,
+// re-reading accounted for 80% of the cost. The old 500,000-char limit was per
+// document with no total, so a handful of files could exhaust the model's
+// context window and the session would simply fail.
+//
+// Until now the only thing preventing that was the context window itself —
+// a number Anthropic controls, not us. When a larger window ships, this limit
+// is what keeps the ceiling ours.
+//
+// 80,000 characters is roughly thirty pages: enough for a real installation
+// guide, cheap enough to re-read, and far below anything that breaks a session.
+const MANUAL_CHAR_LIMIT = 80000;
+const MANUAL_TOTAL_CHARS = 80000;
 // Screenshots/images attached but not yet handed to the AI.
 const pendingImages = new Map();   // deviceId -> [{mediaType, data}]
 
@@ -1315,13 +1332,29 @@ wss.on('connection', (ws) => {
 
     if (msg.type === 'attach_manual' && deviceId) {
       const doc = { title: String(msg.title || 'Document').slice(0, 120),
-                    text: String(msg.text || '').slice(0, 500000) };
+                    text: String(msg.text || '').slice(0, MANUAL_CHAR_LIMIT) };
       const q = customerManuals.get(deviceId) || { pending: [], all: [] };
+      // Enforced here as well as in the agent, and across the WHOLE
+      // conversation rather than per document. The agent runs on the customer's
+      // PC and cannot be trusted to police a limit that costs us money, and
+      // five documents each just under the per-file limit would exhaust the
+      // context window exactly as one huge one did.
+      const already = q.all.reduce((n, d) => n + d.text.length, 0);
+      if (already + doc.text.length > MANUAL_TOTAL_CHARS) {
+        const room = Math.max(0, MANUAL_TOTAL_CHARS - already);
+        log(`manual refused for ${deviceId}: ${already + doc.text.length} chars would exceed the ${MANUAL_TOTAL_CHARS} limit`);
+        audit({ event: 'manual_refused_too_long', deviceId, title: doc.title,
+                chars: doc.text.length, alreadyAttached: already });
+        ws.send(JSON.stringify({ type: 'ai_message', text: room > 2000
+          ? `I can only hold about ${Math.round(MANUAL_TOTAL_CHARS / 1000)}k characters of documents in one conversation, and there is roughly ${Math.round(room / 1000)}k left. Please attach just the section covering this problem.`
+          : `I already have as much documentation as I can read in one conversation. Ask your new question and I will start a fresh session, or paste the specific steps you want me to follow.` }));
+        return;
+      }
       q.pending.push(doc);
       q.all.push(doc);
       customerManuals.set(deviceId, q);
       audit({ event: 'manual_attached', deviceId, title: doc.title, chars: doc.text.length });
-      log(`customer attached "${doc.title}" (${doc.text.length} chars)`);
+      log(`customer attached "${doc.title}" (${doc.text.length} chars, ${already + doc.text.length} total)`);
     }
 
     if (msg.type === 'open_ticket' && deviceId) {
