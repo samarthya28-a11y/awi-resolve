@@ -20,10 +20,14 @@ if "%CUST%"=="" ( echo A customer name is required. & pause & exit /b 1 )
 
 echo.
 echo   1. Trial     - everything except consented PowerShell (default 15 days)
-echo   2. Incident  - paid 24-hour pass, Standard capabilities (default 1 day)
+echo   2. Incident  - paid 24-hour pass, FULLY loaded incl. deployment
 echo   3. Standard  - diagnostics + fixes, no software deployment
 echo   4. Pro       - everything including deployment
 echo   5. Full      - Pro + consented PowerShell (IT admin must also enable)
+echo.
+echo   The pass is 24 hours of cover that starts the FIRST time the customer
+echo   asks Resolve something - not when you issue it. Its "days" below is how
+echo   long the key stays redeemable (default 90), not the length of cover.
 echo.
 set /p PLANNO="Plan [1/2/3/4/5]         : "
 if "%PLANNO%"=="1" set PLAN=trial
@@ -38,6 +42,7 @@ if "%SEATS%"=="" set SEATS=1
 
 rem Blank = let licgen apply the per-plan default (trial 15, incident 1, else 365).
 set /p DAYS="Valid for how many days  : "
+rem  Subscription plans: days of cover. Incident: days to redeem the pass.
 
 echo.
 echo   The next three are optional - press Enter to skip any of them.
@@ -62,8 +67,10 @@ if "%DAYS%"=="" (
 )
 if errorlevel 1 ( echo FAILED - tell Claude Code. & pause & exit /b 1 )
 
-echo Give the customer the key above. They paste it into "licenseKey"
-echo in config.json next to the installed app, then restart Resolve.
+echo Give the customer the key above. They open AWI Resolve, paste it into
+echo the box at the top of the window and click Activate. Nothing to edit,
+echo nothing to restart. A renewed key goes in the same place, or in the
+echo Licence window.
 echo.
 echo Tip: add --customer-id your-org-slug when issuing so PCs map to that
 echo organisation's Approved Software Library for IT-admin installs.
