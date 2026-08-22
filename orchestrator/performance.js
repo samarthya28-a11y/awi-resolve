@@ -46,13 +46,51 @@ function daysSince(iso) {
   return Number.isFinite(t) ? Math.floor((Date.now() - t) / 86400000) : null;
 }
 
+// Ticket bundles as sold on the website, cheapest per ticket at the top.
+// Mirrors lib/pricing.ts; if those change, change these.
+const BUNDLES = [
+  { tickets: 500, price: 29500 },   // Rs 59 each
+  { tickets: 100, price: 6900 },    // Rs 69 each
+  { tickets: 25,  price: 1975 },    // Rs 79 each
+];
+
+/**
+ * What an organisation has most likely paid per ticket.
+ *
+ * Inferred from how many they bought rather than recorded at purchase, because
+ * the ledger stores quantities and not prices. Volume maps cleanly onto the
+ * bundle rates, so for a real purchase this is exact; for a hand-credited trial
+ * it is a reasonable list-price valuation of what they were given.
+ *
+ * Everything derived from it is labelled an estimate. A margin figure that
+ * looks measured but is inferred is the kind of number a business decision gets
+ * made on and then regretted.
+ */
+function ratePerTicket(purchased) {
+  for (const b of BUNDLES) {
+    if (purchased >= b.tickets) return b.price / b.tickets;
+  }
+  return BUNDLES[BUNDLES.length - 1].price / BUNDLES[BUNDLES.length - 1].tickets;
+}
+
 /**
  * The one-line verdict for a customer, in words rather than a score.
  *
  * A ranked number tells whoever reads this nothing about what to do. Ordered so
  * the most actionable state wins when several apply.
  */
-function flagFor({ balance, metered, sessions, escalationRate, quietDays, pcs }) {
+function flagFor({ balance, metered, sessions, escalationRate, quietDays, pcs,
+                   costPerTicketUsedInr, ticketRateInr }) {
+  // Losing money on them outranks everything else here. It is the only flag
+  // that questions whether to keep the customer at all, rather than what to do
+  // for them next.
+  if (costPerTicketUsedInr != null && ticketRateInr != null
+      && costPerTicketUsedInr > ticketRateInr && sessions >= 3) {
+    return {
+      level: 'urgent',
+      text: `Costing ₹${costPerTicketUsedInr.toFixed(0)} a ticket against ₹${ticketRateInr.toFixed(0)} paid — losing money`,
+    };
+  }
   if (metered && balance <= 0) {
     return { level: 'urgent', text: 'Out of tickets — sessions are being refused now' };
   }
@@ -142,6 +180,20 @@ function performance({ usdToInr = 88, days = 30 } = {}) {
     const escalationRate = rate(t.escalated, t.sessions);
     const quietDays = t.lastAt ? daysSince(t.lastAt) : null;
     const count = pcs[customerId] || 0;
+
+    // Is this customer worth serving?
+    //
+    // Cost is measured; revenue is inferred from bundle rates, so margin is an
+    // estimate and is named as one. The ratio that actually decides it is cost
+    // per ticket USED against what a ticket sells for — a customer burning more
+    // in tokens than their tickets are worth loses money however many they buy.
+    const purchased = led.metered ? (led.purchased || 0) : 0;
+    const used = led.metered ? (led.used || 0) : 0;
+    const perTicket = purchased > 0 ? ratePerTicket(purchased) : null;
+    const revenueInr = perTicket != null ? +(purchased * perTicket).toFixed(2) : null;
+    const costInr = inr(t.usd);
+    const costPerTicketUsedInr = used > 0 ? +(costInr / used).toFixed(2) : null;
+
     return {
       customerId,
       pcs: count,
@@ -150,7 +202,16 @@ function performance({ usdToInr = 88, days = 30 } = {}) {
       escalated: t.escalated,
       escalationRate,
       avgCostInr: t.withCost ? inr(t.usd / t.withCost) : null,
-      totalCostInr: inr(t.usd),
+      totalCostInr: costInr,
+      // Commercials. estimatedRevenueInr is list-price valuation, not billing.
+      ticketRateInr: perTicket != null ? +perTicket.toFixed(2) : null,
+      estimatedRevenueInr: revenueInr,
+      estimatedMarginInr: revenueInr != null ? +(revenueInr - costInr).toFixed(2) : null,
+      costPerTicketUsedInr,
+      // The verdict that matters: does serving them cost more than they pay?
+      unprofitable: costPerTicketUsedInr != null && perTicket != null
+        ? costPerTicketUsedInr > perTicket
+        : false,
       checksRun: t.checks,
       changesMade: t.changes,
       metered: !!led.metered,
@@ -161,6 +222,7 @@ function performance({ usdToInr = 88, days = 30 } = {}) {
       flag: flagFor({
         balance: led.balance ?? 0, metered: !!led.metered,
         sessions: t.sessions, escalationRate, quietDays, pcs: count,
+        costPerTicketUsedInr, ticketRateInr: perTicket,
       }),
     };
   }).sort((a, b) => {
@@ -173,6 +235,8 @@ function performance({ usdToInr = 88, days = 30 } = {}) {
 
   const avgCostInr = all.withCost ? inr(all.usd / all.withCost) : null;
   const ticketsSold = customers.reduce((n, c) => n + (c.purchased || 0), 0);
+  const revenueInr = +customers.reduce((n, c) => n + (c.estimatedRevenueInr || 0), 0).toFixed(2);
+  const spendInr = inr(all.usd);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -196,6 +260,14 @@ function performance({ usdToInr = 88, days = 30 } = {}) {
       // certain than it is.
       midTicketPriceInr: 69,
       marginPerTicketInr: avgCostInr != null ? +(69 - avgCostInr).toFixed(2) : null,
+      // Whole-book commercials. Revenue is a list-price valuation of tickets
+      // credited, not billing, and every customer figure derived from it says
+      // so — a margin that looks measured but is inferred is exactly the number
+      // a business decision gets made on and then regretted.
+      estimatedRevenueInr: revenueInr,
+      totalSpendInr: spendInr,
+      estimatedMarginInr: +(revenueInr - spendInr).toFixed(2),
+      unprofitableCustomers: customers.filter((c) => c.unprofitable).length,
       sessionsWithoutCost: all.sessions - all.withCost,
       unattributedSessions: unattributed,
     },
