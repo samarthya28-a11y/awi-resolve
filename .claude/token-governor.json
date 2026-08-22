@@ -1,0 +1,7 @@
+{
+  "product": "token-governor",
+  "enabled": true,
+  "maxTurns": 8,
+  "blockDumps": true,
+  "maxReadBytes": 80000
+}

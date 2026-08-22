@@ -1,0 +1,16 @@
+---
+description: Refresh .ai handoff after every finished request so the next chat stays small.
+alwaysApply: true
+---
+
+# Token Governor
+
+Read `.ai/HANDOFF.md` and `.ai/SESSION.md` before exploring. Search, then read only the slice you will change. Do not paste files or architecture. Do not skip tests to save tokens.
+
+**After every finished user request** (before the final reply): replace `.ai/HANDOFF.md` (≤60: goal, done, remaining, files, pitfalls, one next step, verify) and `.ai/SESSION.md` (≤40). Append `.ai/DECISIONS.md` if a decision changed. Update `.ai/MAP.md` only if layout or commands changed.
+
+Also mirror the next step into `C:\Users\ASUS\Projects\AWI Resolve V2\.ai\` (HANDOFF + SESSION) when the live product state changed.
+
+On “handoff”, “compact”, or “new chat”: write the files, then stop.
+
+Contract: `.ai/PROTOCOL.md`.

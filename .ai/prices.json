@@ -1,0 +1,14 @@
+{
+  "as_of": "2026-08-20",
+  "source": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "usd_inr": 95.56,
+  "note": "USD per million tokens. Cursor and Claude subscriptions are not 1:1 with the API; dollar figures are API-equivalent.",
+  "default": "sonnet-5",
+  "models": {
+    "sonnet-5": { "name": "Claude Sonnet 5", "input": 2.0, "output": 10.0 },
+    "sonnet-4.6": { "name": "Claude Sonnet 4.6", "input": 3.0, "output": 15.0 },
+    "sonnet-4.5": { "name": "Claude Sonnet 4.5", "input": 3.0, "output": 15.0 },
+    "opus-5": { "name": "Claude Opus 5", "input": 5.0, "output": 25.0 },
+    "haiku-4.5": { "name": "Claude Haiku 4.5", "input": 1.0, "output": 5.0 }
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$raw = [Console]::In.ReadToEnd(); $raw | & '.claude/hooks/tg-hook.ps1'\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$raw = [Console]::In.ReadToEnd(); $raw | & '.claude/hooks/tg-hook.ps1'\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Read|Glob|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"$raw = [Console]::In.ReadToEnd(); $raw | & '.claude/hooks/tg-hook.ps1'\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
