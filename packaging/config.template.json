@@ -3,6 +3,8 @@
   "_enrollmentSecret": "The door key. Must match RESOLVE_ENROLLMENT_SECRET on the connector, or the agent is refused at enrollment.",
   "_licenseKey": "Paste the RSLIC1-... key issued by Create-License.cmd. Without it the machine still gets full diagnostics, but fixes and deployment are withheld.",
   "_customerId": "The organisation this PC belongs to. Scopes the usage console and the prepaid ticket balance.",
+  "_branding": "Optional co-branding for the support window. The company NAME is taken from the licence (its brandName, or failing that the customer name) and cannot be set here — that is deliberate, so a PC cannot be dressed up as another company. The LOGO is local: set logoPath, or drop logo.png / logo.svg into a 'branding' folder next to this file. renewUrl is where the renewal reminder sends the customer; change it if you resell Resolve. Set enabled to false to keep the window purely Alpha Web branded.",
+  "branding": { "enabled": true, "logoPath": "", "renewUrl": "https://www.alphawebin.com/" },
   "orchestratorUrl": "wss://awi-resolve-connector.fly.dev",
   "enrollmentSecret": "",
   "licenseKey": "",

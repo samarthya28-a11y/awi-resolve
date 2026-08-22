@@ -49,6 +49,19 @@ function issueLicence(opts, privateKeyPem) {
   const seats = Number(opts.seats == null ? 1 : opts.seats);
   if (!Number.isFinite(seats) || seats < 1) throw new Error('seats must be a positive number');
 
+  // Who the licence is allocated to: the named person or team at the customer
+  // who holds it. Optional on purpose — plenty of licences belong to "the
+  // company" and nobody in particular, and a blank line on the licence window
+  // reads better than an invented owner.
+  const licensedTo = String(opts.licensedTo || '').trim();
+  const licensedToEmail = String(opts.licensedToEmail || '').trim();
+
+  // The customer's own display name for co-branding the support window. Signed
+  // rather than read from their config so a machine cannot be rebranded as
+  // somebody else's company; left off, the billing name is used, which is what
+  // most customers would have typed anyway.
+  const brandName = String(opts.brandName || '').trim();
+
   const days = Number(opts.days == null ? (DEFAULT_DAYS[plan] || 365) : opts.days);
   if (!Number.isFinite(days) || days < 1) throw new Error('days must be a positive number');
 
@@ -70,6 +83,9 @@ function issueLicence(opts, privateKeyPem) {
     licenseId: crypto.randomUUID(),
     customer,
     ...(opts.customerId ? { customerId: String(opts.customerId) } : {}),
+    ...(licensedTo ? { licensedTo } : {}),
+    ...(licensedToEmail ? { licensedToEmail } : {}),
+    ...(brandName ? { brandName } : {}),
     plan,
     seats,
     issuedAt: now.toISOString(),

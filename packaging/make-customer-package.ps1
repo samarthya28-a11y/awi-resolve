@@ -10,7 +10,11 @@
 #
 # Usage:
 #   .\make-customer-package.ps1 -Customer "Acme Ltd" -CustomerId acme-com `
-#       -LicenseKey "RSLIC1-..." -EnrollmentSecret "..."
+#       -LicenseKey "RSLIC1-..." -EnrollmentSecret "..." -LogoPath .\acme-logo.png
+#
+# -LogoPath is optional. Given one, the support window carries the customer's
+# own logo beside AWI Resolve. Their NAME comes from the licence, not from
+# here, so a package cannot claim to belong to a company it was not issued to.
 #
 # Run packaging\build.ps1 first — this repackages that output, it does not build.
 
@@ -20,6 +24,8 @@ param(
   [Parameter(Mandatory=$true)][string]$LicenseKey,
   [Parameter(Mandatory=$true)][string]$EnrollmentSecret,
   [string]$OrchestratorUrl = 'wss://awi-resolve-connector.fly.dev',
+  [string]$LogoPath,
+  [string]$RenewUrl = 'https://www.alphawebin.com/',
   [string]$OutDir
 )
 
@@ -43,6 +49,22 @@ if ([string]::IsNullOrWhiteSpace($EnrollmentSecret)) {
   exit 1
 }
 
+# Check the logo before anything is copied. A package that ships with a missing
+# or unrenderable logo shows a broken image in the header, which looks worse
+# than no branding at all.
+$LogoExt = $null
+if ($LogoPath) {
+  if (-not (Test-Path $LogoPath)) {
+    Write-Host "LogoPath not found: $LogoPath" -ForegroundColor Red
+    exit 1
+  }
+  $LogoExt = [System.IO.Path]::GetExtension($LogoPath).ToLower()
+  if ($LogoExt -notin @('.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif')) {
+    Write-Host "Logo must be .svg, .png, .jpg, .webp or .gif (got '$LogoExt')." -ForegroundColor Red
+    exit 1
+  }
+}
+
 if (-not $OutDir) { $OutDir = Join-Path $Root 'dist\customers' }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -63,6 +85,11 @@ $config = [ordered]@{
   enrollmentSecret  = $EnrollmentSecret
   licenseKey        = $LicenseKey
   customerId        = $CustomerId
+  branding          = [ordered]@{
+    enabled  = $true
+    logoPath = $(if ($LogoExt) { "branding/logo$LogoExt" } else { '' })
+    renewUrl = $RenewUrl
+  }
   uiPort            = 8790
 }
 $config | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $stage 'config.json') -Encoding utf8
@@ -76,6 +103,13 @@ if ($check.licenseKey -ne $LicenseKey -or $check.enrollmentSecret -ne $Enrollmen
   exit 1
 }
 Write-Host '  ok  config stamped and verified' -ForegroundColor Green
+
+if ($LogoExt) {
+  $brandDir = Join-Path $stage 'branding'
+  New-Item -ItemType Directory -Force -Path $brandDir | Out-Null
+  Copy-Item $LogoPath (Join-Path $brandDir "logo$LogoExt") -Force
+  Write-Host "  ok  customer logo bundled (logo$LogoExt)" -ForegroundColor Green
+}
 
 Compress-Archive -Path $stage -DestinationPath $zipPath -CompressionLevel Optimal
 Remove-Item $stage -Recurse -Force

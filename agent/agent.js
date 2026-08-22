@@ -64,9 +64,168 @@ const CONSENT_TIMEOUT_MS = 60000; // spec §7: timeout is treated as declined
 const DATA_DIR = path.join(__dirname, 'data');
 const IDENTITY_FILE = path.join(DATA_DIR, 'device.json');
 const UI_FILE = path.join(__dirname, 'ui', 'index.html');
+const LICENCE_UI_FILE = path.join(__dirname, 'ui', 'licence.html');
+
+// Co-branding the support window is split on purpose. The company NAME comes
+// from the signed licence, so a PC cannot be dressed up as somebody else's
+// company; the LOGO is a local file, because an image cannot travel inside a
+// pasteable key. Either half works without the other.
+const BRANDING = (CONFIG.branding && typeof CONFIG.branding === 'object') ? CONFIG.branding : {};
+const BRANDING_ENABLED = BRANDING.enabled !== false;
+
+// Where a customer is sent to renew. Configurable because a reseller renews at
+// their own desk, and pointing their customer at us would lose them the sale.
+const RENEW_URL = String(BRANDING.renewUrl || 'https://www.alphawebin.com/');
+
+// Formats a browser will render inline. Anything else is ignored rather than
+// served with a guessed type — a mis-typed logo is a broken image in the header.
+const LOGO_TYPES = {
+  '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
+};
+
+// Renewal warning window, in days. One month, as agreed: long enough for a
+// purchase order to go through, short enough that it still feels like news.
+const RENEWAL_WARN_DAYS = 30;
+const REMINDER_SWEEP_MS = 30 * 60 * 1000;
 
 function log(msg) {
   console.log(`[agent ${new Date().toISOString()}] ${msg}`);
+}
+
+// ---------------------------------------------------------------- branding
+// Resolved per request rather than once at startup, so a customer who drops
+// their logo in after installing does not have to restart the agent to see it.
+function resolveCustomerLogo() {
+  if (!BRANDING_ENABLED) return null;
+  const base = path.dirname(CONFIG_PATH);
+  const candidates = [];
+  if (BRANDING.logoPath) {
+    candidates.push(path.isAbsolute(BRANDING.logoPath)
+      ? BRANDING.logoPath
+      : path.join(base, BRANDING.logoPath));
+  }
+  // The zero-configuration path: drop a file into branding next to config.json.
+  for (const ext of Object.keys(LOGO_TYPES)) candidates.push(path.join(base, 'branding', 'logo' + ext));
+  for (const p of candidates) {
+    const type = LOGO_TYPES[path.extname(p).toLowerCase()];
+    if (!type) continue;
+    try { if (fs.statSync(p).isFile()) return { file: p, type }; } catch { /* next */ }
+  }
+  return null;
+}
+
+// The company name last seen on a valid licence, remembered on disk. Without
+// this, a PC that cannot reach the connector opens an unbranded window — the
+// customer would read that as the product having lost their details, when all
+// that is really wrong is the network.
+const BRAND_CACHE_FILE = path.join(DATA_DIR, 'branding.json');
+
+function readBrandName() {
+  if (!BRANDING_ENABLED) return null;
+  try { return JSON.parse(fs.readFileSync(BRAND_CACHE_FILE, 'utf8')).companyName || null; } catch { return null; }
+}
+
+function rememberBrandName(name) {
+  if (!BRANDING_ENABLED || !name || name === readBrandName()) return;
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(BRAND_CACHE_FILE, JSON.stringify({ companyName: name }, null, 2));
+  } catch (e) { log(`could not remember branding: ${e.message}`); }
+}
+
+function brandingForUi() {
+  if (!BRANDING_ENABLED) return { enabled: false, renewUrl: RENEW_URL };
+  return {
+    enabled: true,
+    companyName: readBrandName(),
+    logoUrl: resolveCustomerLogo() ? '/customer-logo' : null,
+    renewUrl: RENEW_URL,
+  };
+}
+
+// ------------------------------------------------------- renewal reminders
+// A licence that lapses unnoticed is the customer's worst day and our worst
+// invoice conversation, so the last month of cover gets one reminder per day —
+// one, not one per window opened, and not one per reconnect.
+//
+// The "shown today" mark lives on disk keyed by licence id AND expiry date, so
+// renewing (or pasting a longer key) resets the count by itself: the new
+// expiry does not match the recorded one, and the state is cleared the moment
+// cover goes back over a month anyway.
+const REMINDER_FILE = path.join(DATA_DIR, 'licence-reminder.json');
+
+function localDayKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function readReminderState() {
+  try { return JSON.parse(fs.readFileSync(REMINDER_FILE, 'utf8')); } catch { return {}; }
+}
+
+function writeReminderState(state) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(REMINDER_FILE, JSON.stringify(state, null, 2));
+  } catch (e) { log(`could not record the renewal reminder: ${e.message}`); }
+}
+
+/**
+ * The reminder owed to the customer right now, or null.
+ *
+ * Pure apart from reading the state file: deciding and delivering are kept
+ * apart so a reminder is never marked as shown when no window was open to
+ * show it in.
+ */
+function dueRenewalReminder(now = new Date()) {
+  const lic = lastLicenceState;
+  if (!lic || !lic.expiresAt) return null;
+  // A 24-hour pass is re-bought, not renewed, and it never lives long enough
+  // for a month's warning to mean anything.
+  if (lic.timeBoxed) return null;
+  if (!lic.valid && !lic.expired) return null;
+
+  const daysLeft = Math.ceil((new Date(lic.expiresAt) - now) / 86400000);
+  const state = readReminderState();
+  if (daysLeft > RENEWAL_WARN_DAYS) {
+    // Renewed, or never close to expiring. Forget the count.
+    if (state.licenseId || state.lastShown) writeReminderState({});
+    return null;
+  }
+
+  const key = { licenseId: lic.licenseId || null, expiresAt: lic.expiresAt };
+  const sameLicence = state.licenseId === key.licenseId && state.expiresAt === key.expiresAt;
+  if (sameLicence && state.lastShown === localDayKey(now)) return null;
+
+  return {
+    message: {
+      type: 'licence_reminder',
+      daysLeft,
+      expired: Boolean(lic.expired) || daysLeft <= 0,
+      licence: lic,
+      renewUrl: RENEW_URL,
+    },
+    mark: { ...key, lastShown: localDayKey(now) },
+  };
+}
+
+/**
+ * Deliver today's reminder, if one is owed and there is somebody to show it to.
+ * Pass a single client to deliver into a window that has just opened.
+ */
+function pushRenewalReminder(client) {
+  const due = dueRenewalReminder();
+  if (!due) return;
+  const raw = JSON.stringify(due.message);
+  if (client) {
+    if (client.readyState !== WebSocket.OPEN) return;
+    client.send(raw);
+  } else {
+    if (!uiClients.size) return; // nobody watching — try again when a window opens
+    toUI(due.message);
+  }
+  writeReminderState(due.mark);
+  log(`renewal reminder shown — ${due.message.daysLeft} day(s) of cover left`);
 }
 
 // ---------------------------------------------------------------- identity
@@ -102,6 +261,19 @@ function startUiServer() {
     if (req.method === 'GET' && (route === '/' || route.startsWith('/index'))) {
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       fs.createReadStream(UI_FILE).pipe(res);
+    } else if (req.method === 'GET' && (route === '/licence' || route === '/licence.html' || route === '/license')) {
+      // A separate window rather than a panel in the chat: licence questions
+      // come up while something else is already on screen, and the customer is
+      // usually reading it out to somebody on the phone.
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      fs.createReadStream(LICENCE_UI_FILE).pipe(res);
+    } else if (req.method === 'GET' && route === '/customer-logo') {
+      const logo = resolveCustomerLogo();
+      if (!logo) { res.writeHead(404).end('No customer logo configured'); return; }
+      // Deliberately not cached: a customer who replaces the file expects to
+      // see the new one, and this is a local read of a few kilobytes.
+      res.writeHead(200, { 'Content-Type': logo.type, 'Cache-Control': 'no-cache' });
+      fs.createReadStream(logo.file).pipe(res);
     } else if (req.method === 'GET' && UI_ASSETS[route]) {
       res.writeHead(200, { 'Content-Type': 'image/svg+xml', 'Cache-Control': 'max-age=86400' });
       fs.createReadStream(UI_ASSETS[route]).pipe(res);
@@ -112,13 +284,18 @@ function startUiServer() {
   const wss = new WebSocket.Server({ server: httpServer });
   wss.on('connection', (client) => {
     uiClients.add(client);
-    client.send(JSON.stringify({ type: 'hello', hostname: os.hostname() }));
+    client.send(JSON.stringify({
+      type: 'hello', hostname: os.hostname(), branding: brandingForUi(),
+    }));
     // The agent starts at boot and the customer opens this window hours later,
     // so the licence state it was told at enrollment has long since been sent
     // to nobody. Replay the last known state to every window that opens, or an
     // unlicensed PC would never show the activation prompt at all.
     if (lastLicenceState) {
       client.send(JSON.stringify({ type: 'licence', licence: lastLicenceState }));
+      // If today's renewal reminder is still owed, this is the first window
+      // that can carry it — a reminder nobody saw has not been given.
+      pushRenewalReminder(client);
     }
     // Ask once, on the first window the customer opens. Until they answer,
     // nothing is uploaded (see sendPostureReport).
@@ -281,6 +458,13 @@ function startUiServer() {
     process.exit(1);
   });
   httpServer.listen(UI_PORT, '127.0.0.1', () => log(`support window available at http://127.0.0.1:${UI_PORT}`));
+
+  // The agent runs for weeks between restarts, so "one reminder a day" cannot
+  // rely on a licence check happening at the right moment. Sweep on a timer;
+  // the day key in the state file is what actually enforces once-a-day.
+  setInterval(() => {
+    try { pushRenewalReminder(); } catch (e) { log(`renewal check failed: ${e.message}`); }
+  }, REMINDER_SWEEP_MS);
 }
 
 // Ask the customer to approve a Tier-2 action. Prompt text is template-generated
@@ -442,7 +626,12 @@ function connect(identity) {
       case 'licence_state':
         log(`licence: ${msg.licence.plan}${msg.licence.valid ? '' : ' (not active)'}`);
         lastLicenceState = msg.licence;
+        rememberBrandName(msg.licence.brandName || msg.licence.customer);
         toUI({ type: 'licence', licence: msg.licence });
+        // Re-broadcast branding: the company name may have only just arrived,
+        // or changed with a re-issued key.
+        toUI({ type: 'branding', branding: brandingForUi() });
+        pushRenewalReminder();
         break;
       case 'auth_failed': log('AUTH FAILED — identity rejected, not retrying'); ws.close(); process.exit(1); break;
       case 'tool_call': handleToolCall(ws, msg); break;

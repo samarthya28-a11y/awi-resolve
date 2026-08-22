@@ -23,6 +23,7 @@
 param(
   [Parameter(Mandatory=$true)][string]$EnrollmentSecret,
   [string]$OrchestratorUrl = 'wss://awi-resolve-connector.fly.dev',
+  [string]$RenewUrl = 'https://www.alphawebin.com/',
   [string]$OutDir
 )
 
@@ -69,6 +70,16 @@ $config = [ordered]@{
   enrollmentSecret = $EnrollmentSecret
   licenseKey       = ''
   customerId       = ''
+  # Co-branding. No logo is bundled — this one file goes to every customer —
+  # but the block ships enabled and documented so an IT admin can drop their
+  # logo in without being told the setting exists. The company NAME needs
+  # nothing here: it comes from the licence they paste in.
+  branding         = [ordered]@{
+    _how     = "To show your own logo beside AWI Resolve, create a 'branding' folder next to this file and put logo.png (or logo.svg) in it. Your company name comes from your licence."
+    enabled  = $true
+    logoPath = ''
+    renewUrl = $RenewUrl
+  }
   uiPort           = 8790
 }
 $config | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $stage 'config.json') -Encoding utf8
@@ -79,6 +90,14 @@ if ($check.enrollmentSecret -ne $EnrollmentSecret -or $check.licenseKey -ne '') 
   Write-Host '  FAILED: config.json did not round-trip correctly.' -ForegroundColor Red
   exit 1
 }
+
+# The licence window is the customer's answer to "whose licence is this, and how
+# long does it run". Shipping a build without it is a support call per install.
+if (-not (Test-Path (Join-Path $stage 'agent\ui\licence.html'))) {
+  Write-Host '  FAILED: this build has no licence window. Re-run packaging\build.ps1.' -ForegroundColor Red
+  exit 1
+}
+Write-Host '  ok  licence window and co-branding included' -ForegroundColor Green
 
 Compress-Archive -Path $stage -DestinationPath $zipPath -CompressionLevel Optimal
 Remove-Item $stage -Recurse -Force

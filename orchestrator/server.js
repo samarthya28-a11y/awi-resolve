@@ -101,6 +101,11 @@ const pendingCalls = new Map(); // callId -> resolve()
  * that would help someone forge one. Sent on every connection so the window can
  * offer activation the moment it is needed, rather than making the customer
  * find and hand-edit a JSON file.
+ *
+ * It also carries the descriptive fields the licence window shows — who the
+ * licence belongs to, who it is allocated to, when it was issued — because the
+ * customer holds that key already: none of it is a secret from them, and being
+ * unable to answer "whose licence is this?" is a support call.
  */
 function licenceSummary(lic) {
   if (!lic) return { valid: false, plan: 'none', reason: 'no licence' };
@@ -109,6 +114,14 @@ function licenceSummary(lic) {
     plan: lic.plan || 'none',
     label: (LICENCE_PLANS[lic.plan] || LICENCE_PLANS.none).label,
     customer: lic.customer || null,
+    customerId: lic.customerId || null,
+    // Who it is allocated to at the customer, and the name their window wears.
+    licensedTo: lic.licensedTo || null,
+    licensedToEmail: lic.licensedToEmail || null,
+    brandName: lic.brandName || lic.customer || null,
+    licenseId: lic.licenseId || null,
+    seats: lic.seats || null,
+    issuedAt: lic.issuedAt || null,
     expiresAt: lic.expiresAt || null,
     daysLeft: lic.daysLeft != null ? lic.daysLeft : null,
     expired: Boolean(lic.expired),
@@ -118,6 +131,7 @@ function licenceSummary(lic) {
     timeBoxed: Boolean(lic.timeBoxed),
     startedAt: lic.startedAt || null,
     hoursLeft: lic.hoursLeft != null ? Math.round(lic.hoursLeft) : null,
+    activationDeadline: lic.activationDeadline || null,
   };
 }
 
@@ -1203,6 +1217,11 @@ const httpServer = http.createServer(async (req, res) => {
         seats: body.seats,
         days: body.days,
         validForHours: body.validForHours,
+        // Optional, and shown to the customer in their licence window: who the
+        // licence is allocated to, and the name their support window wears.
+        licensedTo: body.licensedTo,
+        licensedToEmail: body.licensedToEmail,
+        brandName: body.brandName,
       }, SIGNING_KEY);
 
       // Credit the allowance in the same call. Doing it as a separate step is

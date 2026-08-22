@@ -34,7 +34,15 @@
              font-size:13.5px; font-weight:700; display:flex; align-items:center; gap:8px; }
   .product .mark { width:22px; height:22px; flex:none; }
   .product .g { background:var(--grad); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
-  .status { margin-left:auto; display:flex; align-items:center; gap:7px; font-size:12px; color:var(--muted); font-weight:600; }
+  /* Customer co-branding. Sized to match the Alpha Web mark it stands in for,
+     and object-fit so a wide wordmark is not stretched into a square. */
+  .cust-logo { width:38px; height:38px; object-fit:contain; flex:none; }
+  .brand small.cust-sub { color:var(--muted); letter-spacing:.18em; }
+  .status { margin-left:auto; display:flex; align-items:center; gap:9px; font-size:12px; color:var(--muted); font-weight:600; }
+  .hdr-btn { background:none; border:1px solid var(--line); color:var(--navy-light); font:inherit;
+             font-size:12px; font-weight:700; padding:5px 12px; border-radius:999px; cursor:pointer; }
+  .hdr-btn:hover { border-color:var(--brand-blue); color:var(--brand-blue); }
+  .by-aw { font-size:11px; font-weight:600; color:var(--muted); white-space:nowrap; }
   .dot { width:9px; height:9px; border-radius:50%; background:#c7ceda; transition:.3s; }
   .dot.on { background:var(--brand-green); box-shadow:0 0 0 4px rgba(156,203,59,.2); }
 
@@ -94,6 +102,20 @@
   #licence .lic-msg { margin-top:8px; font-size:13px; }
   #licence .lic-msg.ok { color:#1d7a3c; }
   #licence .lic-msg.bad { color:#b3261e; }
+
+  /* Renewal notice. Amber like the licence bar, because an expiring licence is
+     a deadline and not a failure; red is held back for cover that has actually
+     run out, where something the customer relies on has stopped. */
+  #renew { background:#fff8e8; border-bottom:1px solid #f0d9a8; padding:13px 22px; }
+  #renew.urgent { background:#fdeceb; border-bottom-color:#f3c2be; }
+  #renew .rn-head { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+  #renew .rn-head strong { font-size:14.5px; color:#7a5300; }
+  #renew.urgent .rn-head strong { color:#a01c12; }
+  #renew .rn-head span { font-size:13px; color:#8a7350; }
+  #renew .rn-actions { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+  #renew button { padding:7px 15px; border:0; border-radius:8px; font:inherit; font-size:13px;
+                  font-weight:700; cursor:pointer; background:var(--brand-orange); color:#fff; }
+  #renew button.quiet { background:transparent; border:1px solid #e0cfa4; color:#7a5300; }
   footer { display:flex; gap:12px; padding:16px 22px; background:#fff; border-top:1px solid var(--line); position:relative; }
   footer.drag-over { outline:2px dashed var(--brand-blue); outline-offset:-6px; background:rgba(0,174,239,.06); }
   #box { flex:1; resize:none; font-family:inherit; font-size:14.5px; color:var(--ink);
@@ -114,10 +136,19 @@
 </head>
 <body>
   <header>
-    <img src="/logo.svg" alt="Alpha Web" />
-    <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
+    <!-- Vendor identity by default. Where the customer has their own branding
+         it takes this place and Alpha Web moves to a quiet line by the status
+         dot: it is their PC and their staff, so it should carry their name. -->
+    <img id="aw-logo" src="/logo.svg" alt="Alpha Web" />
+    <span class="brand" id="aw-brand"><strong>Alpha Web</strong><small>Innovations</small></span>
+    <img id="cust-logo" class="cust-logo" alt="" hidden />
+    <span class="brand" id="cust-brand" hidden><strong id="cust-name"></strong><small class="cust-sub">IT Support</small></span>
     <span class="product"><img class="mark" src="/resolve-mark.svg" alt="" /><span class="g">AWI Resolve</span> · Automated IT Support</span>
-    <span class="status"><span class="dot" id="dot"></span><span id="host">connecting…</span></span>
+    <span class="status">
+      <button id="lic-open" class="hdr-btn" title="Who this licence belongs to, and how long it runs">Licence</button>
+      <span id="by-aw" class="by-aw" hidden>by Alpha Web</span>
+      <span class="dot" id="dot"></span><span id="host">connecting…</span>
+    </span>
   </header>
   <!-- Licence state. Hidden entirely when a valid licence is in place: a
        working product should not nag. Shown when unlicensed or expired, with
@@ -130,6 +161,17 @@
       <button id="lic-go">Activate</button>
     </div>
     <div id="lic-msg" class="lic-msg"></div>
+  </div>
+  <!-- Renewal reminder. Raised once a day through the last month of cover and
+       dismissible for the rest of that day: a banner that reappears on every
+       message is one people learn to click past without reading. -->
+  <div id="renew" hidden>
+    <div class="rn-head"><strong id="rn-title"></strong><span id="rn-sub"></span></div>
+    <div class="rn-actions">
+      <button id="rn-renew">Renew</button>
+      <button id="rn-details" class="quiet">Licence details</button>
+      <button id="rn-later" class="quiet">Not now</button>
+    </div>
   </div>
   <div id="feed"></div>
   <footer>
@@ -176,8 +218,10 @@ function clearStatus() { if (statusEl) { statusEl.remove(); statusEl = null; } }
 function handle(m) {
   if (busy) armWatchdog(); // activity — reset the silence timer
   switch (m.type) {
-    case 'hello': hostEl.textContent = m.hostname; break;
+    case 'hello': hostEl.textContent = m.hostname; applyBranding(m.branding); break;
+    case 'branding': applyBranding(m.branding); break;
     case 'licence': renderLicence(m.licence); break;
+    case 'licence_reminder': renderRenewal(m); break;
     case 'licence_result': showLicenceMsg(m.ok, m.message); break;
     case 'status': setStatus(m.text); break;
     case 'ai_message': clearStatus(); el('msg ai', m.text); break;
@@ -225,6 +269,77 @@ function renderCostApproval(m) {
 // Offline findings. Presented as observations with suggestions, never as a
 // verdict — offline this is a short checklist, not the AI technician, and the
 // wording has to keep that distinction visible.
+// ---- customer branding ---------------------------------------------------
+// The company NAME arrives from the signed licence via the agent; the LOGO is
+// a local file the agent serves. Either on its own is enough to brand the
+// window — a customer with no logo file still sees their own name.
+const custLogo = document.getElementById('cust-logo');
+const custBrand = document.getElementById('cust-brand');
+const custName = document.getElementById('cust-name');
+const awLogo = document.getElementById('aw-logo');
+const awBrand = document.getElementById('aw-brand');
+const byAw = document.getElementById('by-aw');
+let renewUrl = '';
+
+function applyBranding(b) {
+  if (!b) return;
+  if (b.renewUrl) renewUrl = b.renewUrl;
+  const name = b.enabled ? (b.companyName || '') : '';
+  const logo = b.enabled ? (b.logoUrl || '') : '';
+  const branded = Boolean(name || logo);
+
+  custName.textContent = name;
+  custBrand.hidden = !name;
+  // Cache-busted so a replaced logo file shows up without restarting anything.
+  if (logo) { custLogo.src = logo + '?t=' + Date.now(); custLogo.alt = name || 'Company logo'; }
+  custLogo.hidden = !logo;
+
+  awLogo.hidden = branded;
+  awBrand.hidden = branded;
+  byAw.hidden = !branded;
+}
+
+// ---- licence window ------------------------------------------------------
+// A real second window rather than a panel: licence questions come up while
+// something else is already on screen, and the answer is usually being read
+// out to somebody on the phone.
+function openLicenceWindow() {
+  window.open('/licence', 'awi-resolve-licence', 'width=580,height=740,resizable=yes,scrollbars=yes');
+}
+document.getElementById('lic-open').addEventListener('click', openLicenceWindow);
+
+// ---- renewal reminder ----------------------------------------------------
+const renewBox = document.getElementById('renew');
+const rnTitle = document.getElementById('rn-title');
+const rnSub = document.getElementById('rn-sub');
+
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }); }
+  catch { return String(iso).slice(0, 10); }
+}
+
+function renderRenewal(m) {
+  if (m.renewUrl) renewUrl = m.renewUrl;
+  const days = Number(m.daysLeft);
+  const expired = Boolean(m.expired) || days <= 0;
+  renewBox.hidden = false;
+  renewBox.classList.toggle('urgent', expired || days <= 7);
+  if (expired) {
+    rnTitle.textContent = 'Your AWI Resolve licence has expired';
+    rnSub.textContent = 'Diagnostics still work. Fixes and deployment need an active licence.';
+  } else {
+    rnTitle.textContent = days === 1 ? 'Your licence expires tomorrow' : `Your licence expires in ${days} days`;
+    rnSub.textContent = (m.licence && m.licence.expiresAt ? `Cover ends on ${fmtDate(m.licence.expiresAt)}. ` : '')
+      + 'Renew before then and nothing stops working.';
+  }
+}
+
+document.getElementById('rn-renew').addEventListener('click', () => {
+  if (renewUrl) window.open(renewUrl, '_blank', 'noopener');
+});
+document.getElementById('rn-details').addEventListener('click', openLicenceWindow);
+document.getElementById('rn-later').addEventListener('click', () => { renewBox.hidden = true; });
+
 // ---- licence -------------------------------------------------------------
 const licBox = document.getElementById('licence');
 const licTitle = document.getElementById('lic-title');
@@ -248,6 +363,9 @@ function renderLicence(lic) {
     // noise, and noise is what people learn to ignore.
     licBox.hidden = true;
     licKey.value = '';
+    // Renewed while the window was open: take the reminder down at once rather
+    // than leaving the customer looking at a warning they have already acted on.
+    if (lic.daysLeft == null || lic.daysLeft > 30) renewBox.hidden = true;
     return;
   }
   licBox.hidden = false;

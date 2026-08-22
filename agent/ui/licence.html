@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AWI Resolve — Licence</title>
+<link rel="icon" href="/resolve-mark.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  /* Same brand system as the support window, so this reads as one product. */
+  :root {
+    --brand-blue:#00aeef; --brand-magenta:#ad208e; --brand-green:#9ccb3b; --brand-orange:#f47521;
+    --navy:#15213b; --navy-light:#1f3158; --ink:#1c2333; --muted:#5b667d;
+    --line:#e6e9f0; --surface:#f6f8fc;
+    --shadow-soft:0 10px 30px rgba(21,33,59,.08);
+    --grad:linear-gradient(100deg,var(--brand-blue),var(--brand-magenta) 55%,var(--brand-orange));
+    --font:"Plus Jakarta Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:var(--font); background:var(--surface); color:var(--ink);
+         line-height:1.6; -webkit-font-smoothing:antialiased; }
+
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; background:#fff;
+           border-bottom:1px solid var(--line); box-shadow:var(--shadow-soft); }
+  header img.mark { width:26px; height:26px; flex:none; }
+  header .cust-logo { width:34px; height:34px; object-fit:contain; flex:none; }
+  header .t { font-size:15px; font-weight:800; letter-spacing:-.01em; color:var(--navy); }
+  header .t .g { background:var(--grad); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  header .who { margin-left:auto; font-size:12px; font-weight:600; color:var(--muted); text-align:right; }
+
+  main { padding:18px 20px 26px; }
+
+  .pill { display:inline-flex; align-items:center; gap:7px; padding:5px 13px; border-radius:999px;
+          font-size:12px; font-weight:700; letter-spacing:.02em; }
+  .pill.ok   { background:rgba(156,203,59,.16); color:#3f6b0f; border:1px solid rgba(156,203,59,.45); }
+  .pill.warn { background:#fff8e8; color:#7a5300; border:1px solid #f0d9a8; }
+  .pill.bad  { background:#fdeceb; color:#a01c12; border:1px solid #f3c2be; }
+
+  .card { background:#fff; border:1px solid var(--line); border-radius:16px; padding:16px 18px;
+          box-shadow:var(--shadow-soft); margin-bottom:14px; }
+  .card h2 { margin:0 0 12px; font-size:11px; font-weight:800; text-transform:uppercase;
+             letter-spacing:.16em; color:var(--muted); }
+
+  .headline { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
+  .headline .plan { font-size:21px; font-weight:800; letter-spacing:-.01em; color:var(--navy); }
+  .headline .sub { font-size:13px; color:var(--muted); font-weight:600; }
+
+  /* Label/value rows rather than a table: this gets read aloud down the phone,
+     so each fact needs to be findable on its own line. */
+  .row { display:flex; gap:14px; padding:8px 0; border-top:1px solid var(--line); font-size:13.5px; }
+  .row:first-of-type { border-top:0; }
+  .row .k { flex:0 0 40%; color:var(--muted); font-weight:600; }
+  .row .v { flex:1; font-weight:600; color:var(--ink); overflow-wrap:anywhere; }
+  .row .v.dim { color:var(--muted); font-weight:500; }
+  .row .v code { font-family:ui-monospace,Consolas,monospace; font-size:12.5px; }
+
+  /* Time remaining. A bar because "180 days" means nothing on its own — the
+     customer wants to know whether that is most of the year or the end of it. */
+  .bar { height:8px; border-radius:999px; background:var(--line); overflow:hidden; margin:10px 0 6px; }
+  .bar i { display:block; height:100%; background:var(--brand-green); border-radius:999px; }
+  .bar.warn i { background:var(--brand-orange); }
+  .bar.bad i  { background:#d93025; }
+  .barcap { font-size:12.5px; color:var(--muted); font-weight:600; }
+
+  .note { font-size:13px; color:var(--muted); margin:0; }
+  .note.warn { color:#7a5300; }
+  .note.bad  { color:#a01c12; }
+
+  .actions { display:flex; gap:9px; flex-wrap:wrap; margin-top:4px; }
+  button { font:inherit; font-size:13px; font-weight:700; padding:9px 16px; border-radius:9px;
+           border:0; cursor:pointer; background:var(--brand-orange); color:#fff; }
+  button.quiet { background:#fff; border:1px solid var(--line); color:var(--navy-light); }
+  button.quiet:hover { border-color:var(--brand-blue); color:var(--brand-blue); }
+  button:disabled { opacity:.55; cursor:default; }
+
+  .keyrow { display:flex; gap:9px; margin-top:10px; }
+  .keyrow input { flex:1; padding:9px 12px; border:1px solid var(--line); border-radius:9px;
+                  font:inherit; font-size:13px; }
+  .keyrow input:focus { outline:none; border-color:var(--brand-blue); box-shadow:0 0 0 3px rgba(0,174,239,.15); }
+  .msg { margin-top:9px; font-size:13px; font-weight:600; min-height:19px; }
+  .msg.ok { color:#1d7a3c; } .msg.bad { color:#b3261e; }
+
+  .foot { font-size:11.5px; color:var(--muted); text-align:center; margin-top:16px; }
+</style>
+</head>
+<body>
+  <header>
+    <img id="cust-logo" class="cust-logo" alt="" hidden />
+    <img class="mark" src="/resolve-mark.svg" alt="" />
+    <span class="t"><span class="g">AWI Resolve</span> · Licence</span>
+    <span class="who" id="who"></span>
+  </header>
+
+  <main>
+    <div class="card">
+      <div class="headline">
+        <span class="plan" id="plan">Checking…</span>
+        <span class="pill warn" id="state">…</span>
+      </div>
+      <div class="sub" id="planSub"></div>
+      <div id="meter" hidden>
+        <div class="bar" id="bar"><i id="barFill" style="width:0%"></i></div>
+        <div class="barcap" id="barCap"></div>
+      </div>
+      <p class="note" id="stateNote" hidden></p>
+    </div>
+
+    <!-- Who holds this licence. The question this window exists to answer:
+         a customer with several licences needs to know which one this PC is
+         using and whose budget it came out of. -->
+    <div class="card">
+      <h2>Allocated to</h2>
+      <div class="row"><span class="k">Organisation</span><span class="v" id="vCustomer">—</span></div>
+      <div class="row"><span class="k">Licence holder</span><span class="v" id="vHolder">—</span></div>
+      <div class="row"><span class="k">Contact</span><span class="v" id="vContact">—</span></div>
+      <div class="row"><span class="k">This PC</span><span class="v" id="vHost">—</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Validity</h2>
+      <div class="row"><span class="k">Issued</span><span class="v" id="vIssued">—</span></div>
+      <div class="row"><span class="k" id="kExpires">Expires</span><span class="v" id="vExpires">—</span></div>
+      <div class="row"><span class="k">Time remaining</span><span class="v" id="vLeft">—</span></div>
+      <div class="row"><span class="k">Seats covered</span><span class="v" id="vSeats">—</span></div>
+      <div class="row"><span class="k">Licence reference</span><span class="v" id="vId"><code>—</code></span></div>
+    </div>
+
+    <div class="card">
+      <h2>Renew or replace</h2>
+      <p class="note" id="renewNote">Renewals are handled by Alpha Web. Once you have a new key, paste it below — it takes effect straight away, and nothing else on this PC needs changing.</p>
+      <div class="actions" style="margin-top:12px">
+        <button id="renewBtn">How to renew</button>
+        <button class="quiet" id="copyBtn">Copy licence details</button>
+      </div>
+      <div class="keyrow">
+        <input id="key" type="text" placeholder="Paste a new licence key (RSLIC1-…)" spellcheck="false" autocomplete="off" />
+        <button id="apply">Apply</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="foot">AWI Resolve · Alpha Web Innovations</div>
+  </main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let renewUrl = '';
+let latest = null;
+let hostname = '';
+
+function fmtDate(iso) {
+  if (!iso) return null;
+  try { return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' }); }
+  catch { return String(iso).slice(0, 10); }
+}
+function fmtDateTime(iso) {
+  if (!iso) return null;
+  try { return new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  catch { return String(iso).slice(0, 16).replace('T', ' '); }
+}
+function set(id, value, dim) {
+  const el = $(id);
+  el.textContent = value == null || value === '' ? '—' : value;
+  el.classList.toggle('dim', Boolean(dim) || value == null || value === '');
+}
+
+function applyBranding(b) {
+  if (!b) return;
+  if (b.renewUrl) renewUrl = b.renewUrl;
+  const logo = b.enabled ? (b.logoUrl || '') : '';
+  if (logo) { $('cust-logo').src = logo + '?t=' + Date.now(); $('cust-logo').alt = b.companyName || 'Company logo'; }
+  $('cust-logo').hidden = !logo;
+  $('who').textContent = (b.enabled && b.companyName) ? b.companyName : '';
+}
+
+// The unlicensed case is not an error state to apologise for: diagnostics still
+// work, so the window says what is missing and how to fix it, and nothing else.
+function renderUnlicensed(lic) {
+  $('plan').textContent = 'Not activated';
+  $('state').className = 'pill warn';
+  $('state').textContent = 'No licence';
+  $('planSub').textContent = 'Resolve can still diagnose this PC. Fixes and deployment need a licence key.';
+  $('stateNote').hidden = !lic || !lic.reason;
+  $('stateNote').className = 'note warn';
+  if (lic && lic.reason) $('stateNote').textContent = lic.reason;
+  $('meter').hidden = true;
+}
+
+function render(lic) {
+  latest = lic || null;
+  set('vHost', hostname || null);
+  if (!lic || (!lic.valid && !lic.expired)) { renderUnlicensed(lic); return; }
+
+  const expired = Boolean(lic.expired);
+  $('plan').textContent = lic.label || lic.plan || 'Licence';
+  $('state').className = 'pill ' + (expired ? 'bad' : (lic.daysLeft != null && lic.daysLeft <= 30 ? 'warn' : 'ok'));
+  $('state').textContent = expired ? 'Expired' : 'Active';
+
+  // Who and what
+  set('vCustomer', lic.customer);
+  set('vHolder', lic.licensedTo, !lic.licensedTo);
+  if (!lic.licensedTo) $('vHolder').textContent = 'Not allocated to a named person';
+  set('vContact', lic.licensedToEmail, !lic.licensedToEmail);
+  set('vSeats', lic.seats ? (lic.seats + (lic.seats === 1 ? ' PC' : ' PCs')) : null);
+  set('vIssued', fmtDate(lic.issuedAt));
+  // A short reference is enough to find the licence in our records, and a full
+  // id read down the phone is a transcription error waiting to happen.
+  $('vId').innerHTML = '<code>' + (lic.licenseId ? String(lic.licenseId).slice(0, 8).toUpperCase() : '—') + '</code>';
+
+  if (lic.timeBoxed) {
+    // A pass, not a subscription: its window starts on first use, so "expires"
+    // means two different things depending on whether it has been started.
+    const started = Boolean(lic.startedAt);
+    $('kExpires').textContent = started ? 'Cover ends' : 'Must be started by';
+    set('vExpires', started ? fmtDateTime(lic.expiresAt) : fmtDate(lic.activationDeadline || lic.expiresAt));
+    const hrs = lic.hoursLeft;
+    set('vLeft', expired ? 'None — this pass has run out'
+      : (started ? (hrs != null ? hrs + (hrs === 1 ? ' hour' : ' hours') : '—')
+                 : 'Not started — the clock begins the first time you ask for help'));
+    $('planSub').textContent = started
+      ? 'Started ' + fmtDateTime(lic.startedAt) + '.'
+      : 'This pass has not been started yet.';
+    if (started && lic.validForHours) {
+      showBar(Math.max(0, (hrs || 0) / lic.validForHours), expired || (hrs != null && hrs <= 4),
+        expired, (expired ? 'Ran out' : hrs + ' of ' + lic.validForHours + ' hours left'));
+    } else {
+      $('meter').hidden = true;
+    }
+  } else {
+    $('kExpires').textContent = expired ? 'Expired on' : 'Expires on';
+    set('vExpires', fmtDate(lic.expiresAt));
+    const days = lic.daysLeft;
+    set('vLeft', expired ? 'Cover has ended'
+      : (days == null ? 'No expiry' : (days === 1 ? '1 day' : days + ' days')));
+    $('planSub').textContent = lic.customer ? 'Licensed to ' + lic.customer + '.' : '';
+    if (!expired && days != null) {
+      // Measured against a year, which is what an annual plan actually is; a
+      // shorter licence simply shows a fuller bar, which is honest enough.
+      showBar(Math.min(1, days / 365), days <= 30, days <= 7,
+        days <= 30 ? 'Renewal due — ' + days + ' day' + (days === 1 ? '' : 's') + ' of cover left'
+                   : days + ' days of cover left');
+    } else if (expired) {
+      showBar(0, true, true, 'Cover ended ' + (fmtDate(lic.expiresAt) || ''));
+    } else {
+      $('meter').hidden = true;
+    }
+  }
+
+  const nearing = !expired && lic.daysLeft != null && lic.daysLeft <= 30;
+  $('stateNote').hidden = !(expired || nearing);
+  $('stateNote').className = 'note ' + (expired ? 'bad' : 'warn');
+  if (expired) {
+    $('stateNote').textContent = (lic.reason || 'This licence has expired.')
+      + ' Diagnostics still work; fixes and deployment resume as soon as a valid key is pasted in below.';
+  } else if (nearing) {
+    $('stateNote').textContent = 'Renewal is due. You will see one reminder a day until this licence is renewed.';
+  }
+}
+
+function showBar(fraction, warn, bad, caption) {
+  $('meter').hidden = false;
+  $('bar').className = 'bar' + (bad ? ' bad' : (warn ? ' warn' : ''));
+  $('barFill').style.width = Math.round(Math.max(0, Math.min(1, fraction)) * 100) + '%';
+  $('barCap').textContent = caption || '';
+}
+
+// ---- actions --------------------------------------------------------------
+$('renewBtn').addEventListener('click', () => {
+  if (renewUrl) window.open(renewUrl, '_blank', 'noopener');
+});
+
+// Copying beats reading it out: these details end up pasted into an email to
+// Alpha Web, and a mistyped reference sends the renewal to the wrong licence.
+$('copyBtn').addEventListener('click', async () => {
+  const l = latest || {};
+  const lines = [
+    'AWI Resolve licence details',
+    'PC              : ' + (hostname || '—'),
+    'Organisation    : ' + (l.customer || '—'),
+    'Licence holder  : ' + (l.licensedTo || '—'),
+    'Plan            : ' + (l.label || l.plan || '—'),
+    'Seats           : ' + (l.seats || '—'),
+    'Issued          : ' + (fmtDate(l.issuedAt) || '—'),
+    (l.expired ? 'Expired on      : ' : 'Expires on      : ') + (fmtDate(l.expiresAt) || '—'),
+    'Reference       : ' + (l.licenseId ? String(l.licenseId).slice(0, 8).toUpperCase() : '—'),
+  ].join('\n');
+  try {
+    await navigator.clipboard.writeText(lines);
+    showMsg(true, 'Licence details copied — paste them into your email to Alpha Web.');
+  } catch {
+    showMsg(false, 'Could not copy automatically. Select the details above and copy them by hand.');
+  }
+});
+
+function showMsg(ok, text) {
+  $('msg').className = 'msg ' + (ok ? 'ok' : 'bad');
+  $('msg').textContent = text || '';
+}
+
+function applyKey() {
+  const key = $('key').value.trim();
+  if (!key) { showMsg(false, 'Paste your new licence key first.'); return; }
+  $('apply').disabled = true;
+  $('apply').textContent = 'Checking…';
+  showMsg(true, '');
+  ws.send(JSON.stringify({ type: 'activate_licence', key }));
+}
+$('apply').addEventListener('click', applyKey);
+$('key').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyKey(); });
+
+// ---- connection -----------------------------------------------------------
+// The agent replays the last licence state to every window that opens, so this
+// page needs no request of its own: connect, and the answer arrives.
+let ws;
+function connect() {
+  ws = new WebSocket('ws://' + location.host);
+  ws.onclose = () => setTimeout(connect, 1500);
+  ws.onmessage = (e) => {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    switch (m.type) {
+      case 'hello': hostname = m.hostname || ''; applyBranding(m.branding); render(latest); break;
+      case 'branding': applyBranding(m.branding); break;
+      case 'licence': render(m.licence); break;
+      case 'licence_result':
+        showMsg(m.ok, m.message);
+        if (!m.ok) { $('apply').disabled = false; $('apply').textContent = 'Apply'; }
+        else { $('key').value = ''; $('apply').disabled = false; $('apply').textContent = 'Apply'; }
+        break;
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>

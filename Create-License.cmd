@@ -40,10 +40,25 @@ rem Blank = let licgen apply the per-plan default (trial 15, incident 1, else 36
 set /p DAYS="Valid for how many days  : "
 
 echo.
+echo   The next three are optional - press Enter to skip any of them.
+echo   They are shown to the customer in the Licence window of their app.
+echo.
+set /p HOLDER="Allocated to (person)    : "
+set /p HEMAIL="Their email              : "
+set /p BRAND="Their company display name (blank = customer name above) : "
+
+rem Built up separately so a blank answer does not pass an empty flag through
+rem to licgen, which would reject it rather than ignore it.
+set EXTRA=
+if not "%HOLDER%"=="" set EXTRA=!EXTRA! --licensed-to "%HOLDER%"
+if not "%HEMAIL%"=="" set EXTRA=!EXTRA! --licensed-to-email "%HEMAIL%"
+if not "%BRAND%"=="" set EXTRA=!EXTRA! --brand-name "%BRAND%"
+
+echo.
 if "%DAYS%"=="" (
-    node tools\licgen.js --customer "%CUST%" --plan %PLAN% --seats %SEATS%
+    node tools\licgen.js --customer "%CUST%" --plan %PLAN% --seats %SEATS% !EXTRA!
 ) else (
-    node tools\licgen.js --customer "%CUST%" --plan %PLAN% --seats %SEATS% --days %DAYS%
+    node tools\licgen.js --customer "%CUST%" --plan %PLAN% --seats %SEATS% --days %DAYS% !EXTRA!
 )
 if errorlevel 1 ( echo FAILED - tell Claude Code. & pause & exit /b 1 )
 
@@ -52,6 +67,10 @@ echo in config.json next to the installed app, then restart Resolve.
 echo.
 echo Tip: add --customer-id your-org-slug when issuing so PCs map to that
 echo organisation's Approved Software Library for IT-admin installs.
+echo.
+echo The customer's own logo is NOT part of the key - bundle it with
+echo packaging\make-customer-package.ps1 -LogoPath their-logo.png, or drop the
+echo file into a "branding" folder next to config.json on the PC.
 echo.
 pause
 endlocal

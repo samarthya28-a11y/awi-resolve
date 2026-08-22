@@ -59,6 +59,26 @@ const PLANS = {
   full:     { label: 'Full IT Support', diagnostics: true, fixes: true,  deployment: true,  security: true,  fullSupport: true },
 };
 
+// The descriptive half of a licence: whose it is, who holds it, and what name
+// their support window should carry. Shared by every return path below so an
+// EXPIRED licence still reports its own details — a renewal conversation is
+// precisely the moment the customer needs to see whose licence lapsed.
+//
+// brandName falls back to the billing name, so co-branding works for every key
+// ever issued without anyone having to re-issue one.
+function identity(p) {
+  return {
+    customer: p.customer || null,
+    customerId: p.customerId || null,
+    licensedTo: p.licensedTo || null,
+    licensedToEmail: p.licensedToEmail || null,
+    brandName: p.brandName || p.customer || null,
+    licenseId: p.licenseId || null,
+    seats: p.seats || 1,
+    issuedAt: p.issuedAt || null,
+  };
+}
+
 function decode(key) {
   if (!key || typeof key !== 'string') return { ok: false, error: 'no licence key' };
   // Tolerant on purpose — keys arrive pasted out of emails and chat, so
@@ -132,7 +152,7 @@ function evaluate(key, deviceId, now = new Date()) {
       // Never used, and the window to start it has closed.
       return {
         valid: false, plan: 'none', caps: PLANS.none, expired: true,
-        customer: p.customer, expiresAt: p.expiresAt, validForHours: hours,
+        ...identity(p), expiresAt: p.expiresAt, validForHours: hours,
         reason: `this pass was never used and lapsed on ${String(p.expiresAt).slice(0, 10)}`,
       };
     } else {
@@ -147,7 +167,7 @@ function evaluate(key, deviceId, now = new Date()) {
     const iso = expires.toISOString();
     return {
       valid: false, plan: 'none', caps: PLANS.none, expired: true,
-      customer: p.customer, expiresAt: iso, validForHours: hours || undefined,
+      ...identity(p), expiresAt: iso, validForHours: hours || undefined,
       startedAt: startedIso || undefined,
       reason: timeBoxed
         ? `this ${hours}-hour pass ran out at ${iso.slice(11, 16)} UTC on ${iso.slice(0, 10)}`
@@ -166,10 +186,7 @@ function evaluate(key, deviceId, now = new Date()) {
     valid: true,
     plan: p.plan,
     caps,
-    customer: p.customer,
-    customerId: p.customerId || null,
-    seats: p.seats || 1,
-    licenseId: p.licenseId,
+    ...identity(p),
     // The effective end of cover, which for a started pass is derived from
     // first use rather than taken from the payload.
     expiresAt: expires ? expires.toISOString() : null,

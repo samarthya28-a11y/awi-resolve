@@ -12,6 +12,13 @@
 //
 //   ...--devices <id>,<id>   Optional: lock the licence to specific device IDs.
 //                            Leave it off for a floating seat-count licence.
+//   ...--licensed-to "Name"  Optional: who the licence is ALLOCATED to at the
+//                            customer — a named person or team. Shown on the
+//                            licence window so a customer can see whose it is.
+//   ...--licensed-to-email x Optional: contact shown beside the holder.
+//   ...--brand-name "Name"   Optional: the customer's display name for
+//                            co-branding the support window. Defaults to
+//                            --customer.
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -66,6 +73,11 @@ function issue() {
   const seats = Number(arg('seats', '1'));
   const days = Number(arg('days', String(DEFAULT_DAYS[plan] || 365)));
   const devices = (arg('devices') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  // Allocation and branding. All optional, all signed: they are shown to the
+  // customer as fact, so they must not be editable on the customer's own PC.
+  const licensedTo = (arg('licensed-to') || '').trim();
+  const licensedToEmail = (arg('licensed-to-email') || '').trim();
+  const brandName = (arg('brand-name') || '').trim();
 
   if (!customer) { console.error('Missing --customer "Name"'); process.exit(1); }
   if (!PLANS.includes(plan)) { console.error(`--plan must be one of: ${PLANS.join(', ')}`); process.exit(1); }
@@ -95,6 +107,9 @@ function issue() {
     licenseId: crypto.randomUUID(),
     customer,
     customerId: arg('customer-id') || undefined,
+    ...(licensedTo ? { licensedTo } : {}),
+    ...(licensedToEmail ? { licensedToEmail } : {}),
+    ...(brandName ? { brandName } : {}),
     plan,
     seats,
     issuedAt: now.toISOString(),
@@ -118,6 +133,10 @@ function issue() {
     console.log('');
     console.log(`Customer : ${customer}`);
     if (payload.customerId) console.log(`Org id   : ${payload.customerId}`);
+    if (payload.licensedTo) {
+      console.log(`Held by  : ${payload.licensedTo}${payload.licensedToEmail ? ` <${payload.licensedToEmail}>` : ''}`);
+    }
+    if (payload.brandName) console.log(`Brand    : ${payload.brandName}  (shown in their support window)`);
     console.log(`Plan     : ${plan}   Seats: ${seats}`);
     if (validForHours > 0) {
       console.log(`Cover    : ${validForHours} hours, starting when the customer first uses it`);
