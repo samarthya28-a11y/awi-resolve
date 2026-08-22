@@ -58,6 +58,13 @@
   .msg{font-size:13px;font-weight:600;margin-top:10px;min-height:18px}
   .msg.err{color:#d1554f} .msg.ok{color:#3d6b12}
   .queue{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .danger-btn{background:#fff;border:1px solid #f5c6c2;color:#d1554f}
+  .danger-btn:hover{background:#fdeceb}
+  .confirm{background:#fdeceb;border:1px solid #f3c2be;border-radius:10px;padding:12px 14px;margin-top:12px}
+  .confirm p{margin:0 0 10px;font-size:13px;color:#a01c12;font-weight:600}
+  .newtok{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-top:12px}
+  .newtok .lbl{font-size:11px;font-weight:800;letter-spacing:.06em;color:var(--muted);text-transform:uppercase;margin-bottom:6px}
+  .newtok code{font-family:ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all;color:var(--navy)}
   footer{max-width:920px;margin:0 auto;padding:8px 26px 30px;font-size:11.5px;color:var(--muted)}
   @media(max-width:700px){.row{grid-template-columns:1fr}}
 </style>
@@ -129,6 +136,31 @@
     <h2>Documents Resolve can read <span id="count" style="color:var(--muted);font-weight:600"></span></h2>
     <p class="help">Remove anything out of date — a superseded manual is worse than none, because Resolve will quote it.</p>
     <div id="list"><div class="empty">Nothing uploaded yet.</div></div>
+  </div>
+
+  <!-- Rotation. Confirmed inline rather than with a browser dialog, which is
+       the sort of thing people dismiss without reading — and this one signs
+       out every other person and link using the old token. -->
+  <div class="card">
+    <h2>Access token</h2>
+    <p class="help">
+      One token opens this page, your approved software library and your usage console.
+      Rotate it if it has been shared by mistake, or when someone who had it leaves.
+      <strong>The old token stops working straight away</strong>, so anyone signed in elsewhere
+      is signed out and any saved link stops opening — you will need to pass the new one on.
+    </p>
+    <button class="danger-btn" id="rotate">Rotate access token</button>
+    <div id="rotateConfirm" class="confirm" hidden>
+      <p>Replace the token for this organisation? Everyone using the current one loses access immediately.</p>
+      <button class="danger-btn" id="rotateYes">Yes, replace it</button>
+      <button class="ghost" id="rotateNo">Cancel</button>
+    </div>
+    <div id="newTok" class="newtok" hidden>
+      <div class="lbl">Your new access token — copy it now</div>
+      <code id="newTokVal"></code>
+      <div style="margin-top:10px"><button class="ghost" id="copyTok">Copy</button></div>
+    </div>
+    <div class="msg" id="rotateMsg"></div>
   </div>
   </div>
 </main>
@@ -274,6 +306,48 @@ function renderDocs(docs) {
     };
   });
 }
+
+// ---- rotate ---------------------------------------------------------------
+$('rotate').onclick = () => {
+  $('rotateConfirm').hidden = false;
+  $('rotate').hidden = true;
+  $('rotateMsg').textContent = '';
+};
+$('rotateNo').onclick = () => { $('rotateConfirm').hidden = true; $('rotate').hidden = false; };
+
+$('rotateYes').onclick = async () => {
+  $('rotateYes').disabled = true;
+  $('rotateYes').textContent = 'Replacing…';
+  try {
+    const j = await api('/api/admin/rotate-token', { method: 'POST' });
+    // Adopt the new token here, or this very page would be signed out by the
+    // change it just made — which reads as the rotation having gone wrong.
+    token = j.token;
+    S.setItem('kbTok', token);
+    $('newTokVal').textContent = j.token;
+    $('newTok').hidden = false;
+    $('rotateMsg').className = 'msg ok';
+    $('rotateMsg').textContent = 'Done. The previous token no longer works.';
+  } catch (e) {
+    $('rotateMsg').className = 'msg err';
+    $('rotateMsg').textContent = e.message;
+  }
+  $('rotateConfirm').hidden = true;
+  $('rotate').hidden = false;
+  $('rotateYes').disabled = false;
+  $('rotateYes').textContent = 'Yes, replace it';
+};
+
+$('copyTok').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText($('newTokVal').textContent);
+    $('rotateMsg').className = 'msg ok';
+    $('rotateMsg').textContent = 'Copied.';
+  } catch {
+    $('rotateMsg').className = 'msg err';
+    $('rotateMsg').textContent = 'Could not copy — select the token above and copy it by hand.';
+  }
+};
 
 async function refresh() {
   const j = await api('/api/admin/knowledge');

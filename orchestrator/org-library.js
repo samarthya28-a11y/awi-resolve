@@ -259,6 +259,47 @@ function ensureAdminToken(customerId) {
   return { customerId: id, token, created: true };
 }
 
+/** The env override, read on its own so rotation can tell where a token came from. */
+function envAdminTokens() {
+  if (!process.env.RESOLVE_CUSTOMER_ADMIN_TOKENS) return {};
+  try { return JSON.parse(process.env.RESOLVE_CUSTOMER_ADMIN_TOKENS); } catch { return {}; }
+}
+
+/**
+ * Is this organisation's token pinned by RESOLVE_CUSTOMER_ADMIN_TOKENS?
+ *
+ * loadAdminTokens lets the environment win over the file, so for a pinned org
+ * a rotation would write a new token to disk that nothing ever reads — and the
+ * admin would be told their leaked token was replaced when it still works.
+ * Better to refuse and say why.
+ */
+function adminTokenIsPinned(customerId) {
+  return Boolean(envAdminTokens()[slugify(customerId)]);
+}
+
+/**
+ * Replace an organisation's access token.
+ *
+ * The old one stops working immediately: that is the entire point, since the
+ * reason to rotate is that somebody has a copy who should not. Anyone still
+ * signed in elsewhere is signed out at their next request.
+ */
+function rotateAdminToken(customerId) {
+  // Checked BEFORE slugify, which falls back to the literal id "org" for blank
+  // or punctuation-only input. Rotating that would quietly replace the token of
+  // a shared catch-all bucket rather than refusing a malformed request.
+  const raw = String(customerId || '').trim();
+  if (!raw) return { ok: false, error: 'unknown organisation' };
+  const id = slugify(raw);
+  if (adminTokenIsPinned(id)) {
+    return { ok: false, error:
+      'this organisation\'s token is fixed by RESOLVE_CUSTOMER_ADMIN_TOKENS on the service, so it cannot be rotated here — change that setting instead' };
+  }
+  const token = crypto.randomBytes(24).toString('base64url');
+  saveAdminToken(id, token);
+  return { ok: true, customerId: id, token };
+}
+
 function adminTokenOk(customerId, supplied) {
   if (!customerId || !supplied) return false;
   const tokens = loadAdminTokens();
@@ -285,6 +326,8 @@ module.exports = {
   publicSettings,
   loadAdminTokens,
   ensureAdminToken,
+  rotateAdminToken,
+  adminTokenIsPinned,
   adminTokenOk,
   validatePackageInput,
   LIB_DIR,

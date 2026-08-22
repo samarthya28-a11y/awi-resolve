@@ -992,6 +992,10 @@ const httpServer = http.createServer(async (req, res) => {
       return res.end('customerId query parameter is required.');
     }
     if (!orgLibrary.adminTokenOk(customerId, token)) {
+      // Audited, not just logged: stdout is discarded by the host within days,
+      // and a run of refused attempts is exactly the thing someone will want to
+      // look back at weeks later.
+      audit({ event: 'org_admin_denied', page: 'software', customerId, ip: req.socket.remoteAddress });
       log(`org-software admin DENIED for ${customerId} from ${req.socket.remoteAddress}`);
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       return res.end('Unauthorised. Ask Alpha Web / your Resolve operator for this org\'s admin token.');
@@ -1069,6 +1073,7 @@ const httpServer = http.createServer(async (req, res) => {
       return res.end('customerId query parameter is required.');
     }
     if (!orgLibrary.adminTokenOk(customerId, token)) {
+      audit({ event: 'org_admin_denied', page: 'knowledge', customerId, ip: req.socket.remoteAddress });
       log(`org-knowledge admin DENIED for ${customerId} from ${req.socket.remoteAddress}`);
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       return res.end('Unauthorised. Ask Alpha Web / your Resolve operator for this org\'s admin token.');
@@ -1112,6 +1117,32 @@ const httpServer = http.createServer(async (req, res) => {
     } catch (e) {
       return json({ error: e.message }, 400);
     }
+  }
+
+  // Rotate an organisation's access token. Authorised with the CURRENT token,
+  // because the person who needs this is the admin holding a credential they
+  // think has leaked — requiring them to come to us first would mean the leaked
+  // token stays live for as long as that takes.
+  if (route === '/api/admin/rotate-token' && req.method === 'POST') {
+    const customerId = orgLibrary.slugify(url.searchParams.get('customerId') || '');
+    const token = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!customerId || !orgLibrary.adminTokenOk(customerId, token)) {
+      audit({ event: 'org_admin_denied', page: 'rotate-token', customerId: customerId || null,
+              ip: req.socket.remoteAddress });
+      log(`rotate-token DENIED for ${customerId || '(none)'} from ${req.socket.remoteAddress}`);
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+    const result = orgLibrary.rotateAdminToken(customerId);
+    if (!result.ok) {
+      res.writeHead(409, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: result.error }));
+    }
+    audit({ event: 'org_admin_token_rotated', customerId });
+    log(`org admin token rotated for ${customerId} — the previous one no longer works`);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ ok: true, customerId, token: result.token }));
   }
 
   // Bootstrap helper (dashboard token): create/show an org admin token.
