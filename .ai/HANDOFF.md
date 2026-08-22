@@ -29,6 +29,19 @@ console access, and security visibility over both.
 No half-shipped work: every feature has both its connector and its website
 half live, and `main` matches the deployed connector image.
 
+## Backup / recovery
+
+- `main` is pushed; `.ai/`, agent instructions and the invention brief are now
+  TRACKED (`2553ba0`) so GitHub holds a copy independent of OneDrive.
+- Safekeep mirrors `C:UsersASUSProjects` into OneDrive, current to the
+  minute, and DOES capture the gitignored `tools/licensing-key.pem` and `.env`.
+- It keeps ONE copy per path — no version history. A ransomware run would be
+  mirrored over the good copies; OneDrive's own file versions are the backstop.
+- The signing key also lives as the Fly secret `RESOLVE_LICENCE_SIGNING_KEY`
+  (verified: same key). Fly secrets cannot be read back, so licences could still
+  be ISSUED via the website after a laptop loss, but the key could not be
+  recovered from there. Keep an offline encrypted copy.
+
 ## Pitfalls / failed approaches
 
 - **`flyctl deploy` ships the WORKING TREE, not HEAD.** Deploy from a clean
