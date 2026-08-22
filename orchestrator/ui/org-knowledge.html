@@ -58,6 +58,11 @@
   .msg{font-size:13px;font-weight:600;margin-top:10px;min-height:18px}
   .msg.err{color:#d1554f} .msg.ok{color:#3d6b12}
   .queue{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .ev{display:flex;gap:12px;align-items:baseline;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px}
+  .ev:first-child{border-top:0}
+  .ev time{flex:0 0 145px;color:var(--muted);font-size:12.5px;font-weight:600}
+  .ev .what{flex:1}
+  .ev.warn .what{color:#a01c12;font-weight:600}
   .danger-btn{background:#fff;border:1px solid #f5c6c2;color:#d1554f}
   .danger-btn:hover{background:#fdeceb}
   .confirm{background:#fdeceb;border:1px solid #f3c2be;border-radius:10px;padding:12px 14px;margin-top:12px}
@@ -136,6 +141,19 @@
     <h2>Documents Resolve can read <span id="count" style="color:var(--muted);font-weight:600"></span></h2>
     <p class="help">Remove anything out of date — a superseded manual is worse than none, because Resolve will quote it.</p>
     <div id="list"><div class="empty">Nothing uploaded yet.</div></div>
+  </div>
+
+  <!-- Activity. The organisation's own slice of the audit trail, in words.
+       Refused sign-ins are shown in red because they are the entries somebody
+       actually needs to notice. -->
+  <div class="card">
+    <h2>Recent activity</h2>
+    <p class="help">
+      What has happened on your organisation's account, newest first — including
+      any refused sign-in attempts. Only your organisation's events are shown.
+    </p>
+    <div id="events"><div class="empty">Loading…</div></div>
+    <div style="margin-top:12px"><button class="ghost" id="moreEvents">Show more</button></div>
   </div>
 
   <!-- Rotation. Confirmed inline rather than with a browser dialog, which is
@@ -307,6 +325,54 @@ function renderDocs(docs) {
   });
 }
 
+// ---- activity -------------------------------------------------------------
+// The audit trail stores event names; a customer needs a sentence. Anything not
+// named here falls back to the raw event rather than being hidden, because a
+// blank line where something happened is worse than an ugly one.
+function describe(e) {
+  const t = (s) => (s ? String(s) : '');
+  switch (e.event) {
+    case 'org_kb_added':          return ['Manual added — ' + t(e.title), false];
+    case 'org_kb_removed':        return ['Manual removed', false];
+    case 'org_admin_denied':      return ['Sign-in refused on the ' + (t(e.page) || 'console')
+                                          + ' page' + (e.ip ? ' from ' + t(e.ip) : ''), true];
+    case 'org_admin_token_rotated': return ['Access token replaced — the previous one stopped working', true];
+    case 'org_admin_token_issued':  return ['Access token issued', false];
+    case 'org_software_upsert':   return ['Approved software added or updated — ' + t(e.productId), false];
+    case 'org_software_removed':  return ['Approved software removed — ' + t(e.productId), false];
+    case 'org_settings_updated':  return ['Organisation settings changed'
+                                          + (e.allowFullItSupport === undefined ? ''
+                                             : ' — Full IT Support ' + (e.allowFullItSupport ? 'enabled' : 'disabled')), false];
+    case 'audit_viewed':          return ['This activity list was opened', false];
+    case 'license_checked':       return ['A PC checked its licence'
+                                          + (e.plan ? ' (' + t(e.plan) + ')' : '')
+                                          + (e.valid === false ? ' — not active' : ''), e.valid === false];
+    case 'device_enrolled':       return ['A PC was enrolled', false];
+    case 'seats_exceeded':        return ['More PCs in use than the licence covers', true];
+    default:                      return [t(e.event).replace(/_/g, ' '), false];
+  }
+}
+
+let eventLimit = 15;
+async function loadEvents() {
+  try {
+    const j = await api('/api/admin/audit?limit=' + eventLimit);
+    if (!j.entries.length) { $('events').innerHTML = '<div class="empty">Nothing recorded yet.</div>'; return; }
+    $('events').innerHTML = j.entries.map((e) => {
+      const [text, warn] = describe(e);
+      const when = new Date(e.ts).toLocaleString(undefined,
+        { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+      const esc2 = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      return '<div class="ev' + (warn ? ' warn' : '') + '"><time>' + esc2(when) + '</time>'
+        + '<span class="what">' + esc2(text) + '</span></div>';
+    }).join('');
+    $('moreEvents').hidden = j.entries.length < eventLimit;
+  } catch (e) {
+    $('events').innerHTML = '<div class="empty">Could not load activity: ' + e.message + '</div>';
+  }
+}
+$('moreEvents').onclick = () => { eventLimit += 25; loadEvents(); };
+
 // ---- rotate ---------------------------------------------------------------
 $('rotate').onclick = () => {
   $('rotateConfirm').hidden = false;
@@ -353,6 +419,9 @@ async function refresh() {
   const j = await api('/api/admin/knowledge');
   renderUsage(j.usage);
   renderDocs(j.documents);
+  // Deliberately not awaited: a slow activity read should not hold up the
+  // documents list, and a failure there is reported in its own card.
+  loadEvents();
 }
 
 // ---- upload ---------------------------------------------------------------

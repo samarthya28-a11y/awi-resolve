@@ -77,9 +77,68 @@ function exhausted({ customerId, balance }) {
   return post('exhausted', { customerId, balance });
 }
 
+// ---- refused console sign-ins ---------------------------------------------
+// One wrong token is a typo. Five in five minutes is someone trying tokens, and
+// the console it guards holds an organisation's documentation and decides what
+// software may be installed on their PCs.
+//
+// Counted in memory on purpose: this is a burst detector, and a burst is by
+// definition recent. Losing the counters on restart costs nothing, and it keeps
+// a failed sign-in off the disk path of a request that is already being denied.
+const FAILED_WINDOW_MS = 5 * 60 * 1000;
+const FAILED_THRESHOLD = 5;
+// After alerting, stay quiet for an hour. Someone hammering the endpoint would
+// otherwise send an email per attempt, and an alert that floods is an alert
+// that gets filtered — the same as not having one.
+const ALERT_COOLDOWN_MS = 60 * 60 * 1000;
+
+const failedAttempts = new Map(); // customerId -> [timestamps]
+const lastAlerted = new Map();    // customerId -> timestamp
+
+/**
+ * Record a refused console sign-in, and alert if they are coming in a burst.
+ *
+ * `now` is injected rather than read from the clock so the threshold and the
+ * cooldown can be tested without waiting five real minutes.
+ *
+ * Returns the alert promise when one is sent, and null otherwise, so a caller
+ * can tell the difference without inspecting the counters.
+ */
+function accessDenied({ customerId, ip, page }, now = Date.now()) {
+  const key = customerId || '(no organisation)';
+  const seen = (failedAttempts.get(key) || []).filter((t) => now - t < FAILED_WINDOW_MS);
+  seen.push(now);
+  failedAttempts.set(key, seen);
+
+  if (seen.length < FAILED_THRESHOLD) return null;
+  const last = lastAlerted.get(key) || 0;
+  if (now - last < ALERT_COOLDOWN_MS) return null;
+  lastAlerted.set(key, now);
+  // Reset so the next alert needs a fresh burst rather than one more attempt
+  // on top of an already-full window.
+  failedAttempts.set(key, []);
+
+  return post('access_denied', {
+    customerId: customerId || null,
+    attempts: seen.length,
+    windowMinutes: FAILED_WINDOW_MS / 60000,
+    ip,
+    page,
+  });
+}
+
+/** Test seam: forget every counter. Not used in production. */
+function _resetAccessCounters() {
+  failedAttempts.clear();
+  lastAlerted.clear();
+}
+
 /** Called when an org is credited, so the next time they run dry we say so. */
 function clearExhausted(customerId) {
   reportedEmpty.delete(customerId);
 }
 
-module.exports = { activated, escalated, exhausted, clearExhausted };
+module.exports = {
+  activated, escalated, exhausted, clearExhausted, accessDenied,
+  _resetAccessCounters, FAILED_THRESHOLD, FAILED_WINDOW_MS, ALERT_COOLDOWN_MS,
+};

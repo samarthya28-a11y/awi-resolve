@@ -1000,6 +1000,7 @@ const httpServer = http.createServer(async (req, res) => {
       // and a run of refused attempts is exactly the thing someone will want to
       // look back at weeks later.
       audit({ event: 'org_admin_denied', page: 'software', customerId, ip: req.socket.remoteAddress });
+      alerts.accessDenied({ customerId, ip: req.socket.remoteAddress, page: 'software' });
       log(`org-software admin DENIED for ${customerId} from ${req.socket.remoteAddress}`);
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       return res.end('Unauthorised. Ask Alpha Web / your Resolve operator for this org\'s admin token.');
@@ -1078,6 +1079,7 @@ const httpServer = http.createServer(async (req, res) => {
     }
     if (!orgLibrary.adminTokenOk(customerId, token)) {
       audit({ event: 'org_admin_denied', page: 'knowledge', customerId, ip: req.socket.remoteAddress });
+      alerts.accessDenied({ customerId, ip: req.socket.remoteAddress, page: 'knowledge' });
       log(`org-knowledge admin DENIED for ${customerId} from ${req.socket.remoteAddress}`);
       res.writeHead(401, { 'Content-Type': 'text/plain' });
       return res.end('Unauthorised. Ask Alpha Web / your Resolve operator for this org\'s admin token.');
@@ -1140,6 +1142,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (!asOperator && !asOrg) {
       audit({ event: 'org_admin_denied', page: 'audit', customerId: customerId || null,
               ip: req.socket.remoteAddress });
+      alerts.accessDenied({ customerId, ip: req.socket.remoteAddress, page: 'audit' });
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Unauthorised' }));
     }
@@ -1174,6 +1177,7 @@ const httpServer = http.createServer(async (req, res) => {
     if (!customerId || !orgLibrary.adminTokenOk(customerId, token)) {
       audit({ event: 'org_admin_denied', page: 'rotate-token', customerId: customerId || null,
               ip: req.socket.remoteAddress });
+      alerts.accessDenied({ customerId, ip: req.socket.remoteAddress, page: 'rotate-token' });
       log(`rotate-token DENIED for ${customerId || '(none)'} from ${req.socket.remoteAddress}`);
       res.writeHead(401, { 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Unauthorised' }));
