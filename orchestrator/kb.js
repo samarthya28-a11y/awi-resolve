@@ -113,4 +113,7 @@ function kbStats() {
 // droppable — otherwise a lesson from this morning is invisible until restart.
 function invalidateKb() { INDEX = null; }
 
-module.exports = { searchKb, kbStats, loadKb, invalidateKb };
+// `terms` is exported for org-kb.js. One tokenizer, so a query behaves the same
+// whether it lands on the shipped documentation or a customer's own upload —
+// two would drift and show up as one source inexplicably answering worse.
+module.exports = { searchKb, kbStats, loadKb, invalidateKb, terms };

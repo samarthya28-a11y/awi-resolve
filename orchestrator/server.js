@@ -13,6 +13,7 @@ const { loadManuals } = require('./manuals');
 const customerConsole = require('./console');
 const { evaluate: evaluateLicense, beginIfTimeBoxed, PLANS: LICENCE_PLANS } = require('./licensing');
 const licenceIssue = require('./licence-issue');
+const orgKb = require('./org-kb');
 const alerts = require('./alerts');
 const { performance } = require('./performance');
 const microsoft = require('./microsoft');
@@ -249,6 +250,28 @@ async function resolveCloudTool(ws, deviceId, customerId, name, input) {
       productId: entry.productId,
     });
   }
+  // Knowledge search looks in the customer's OWN documentation first, then in
+  // what ships with the product. Their upload is about their estate, so when
+  // both have something to say about a term, theirs is the one that is actually
+  // about their site — and each excerpt is labelled with where it came from, so
+  // the AI can cite it honestly.
+  if (name === 'search_knowledge_base') {
+    const query = input && input.query;
+    const own = orgKb.searchOrgKb(customerId, query, 5);
+    const shipped = resolveOrchestratorTool(name, input, MANUALS);
+    const shippedHits = (shipped && shipped.result && shipped.result.excerpts) || [];
+    const merged = [...own.results, ...shippedHits].slice(0, 5);
+    if (!merged.length) {
+      return shipped; // its wording already covers "nothing matched" vs "nothing ingested"
+    }
+    return { status: 'ok', result: {
+      found: true,
+      matched: merged.length,
+      fromYourOwnDocumentation: own.results.length,
+      excerpts: merged,
+    } };
+  }
+
   return resolveOrchestratorTool(name, input, MANUALS);
 }
 
@@ -879,6 +902,7 @@ const DASHBOARD_FILE = path.join(__dirname, 'ui', 'fleet.html');
 const REPORTS_FILE = path.join(__dirname, 'ui', 'reports.html');
 const CONSOLE_FILE = path.join(__dirname, 'ui', 'console.html');
 const ADMIN_SOFTWARE_FILE = path.join(__dirname, 'ui', 'org-software.html');
+const ADMIN_KNOWLEDGE_FILE = path.join(__dirname, 'ui', 'org-knowledge.html');
 
 // Constant-time-ish token compare
 function tokenOk(supplied) {
@@ -886,6 +910,34 @@ function tokenOk(supplied) {
   const a = Buffer.from(String(supplied));
   const b = Buffer.from(DASHBOARD_TOKEN);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Read a large JSON body — documentation uploads only.
+ *
+ * readJsonBody's 2 MB cap is a deliberate protection and stays where it is for
+ * every other route. A product manual as base64 clears that in a page or two,
+ * so this route gets its own ceiling rather than raising everyone's.
+ */
+function readLargeJsonBody(req, limitBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limitBytes) {
+        reject(new Error(`that upload is over the ${Math.round(limitBytes / 1048576)} MB limit`));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')); }
+      catch (e) { reject(e); }
+    });
+    req.on('error', reject);
+  });
 }
 
 function readJsonBody(req) {
@@ -980,6 +1032,63 @@ const httpServer = http.createServer(async (req, res) => {
         if (!result.ok) return json({ error: result.error }, 404);
         audit({ event: 'org_software_removed', customerId, productId });
         return json({ ok: true });
+      }
+      res.writeHead(405).end('Method not allowed');
+      return;
+    } catch (e) {
+      return json({ error: e.message }, 400);
+    }
+  }
+
+  // Customer-managed documentation. Same per-org admin token as the software
+  // library — one credential per organisation, not two — and the same rule that
+  // scope comes from the token rather than the request.
+  if (route === '/admin/knowledge' || route.startsWith('/api/admin/knowledge')) {
+    const customerId = orgLibrary.slugify(url.searchParams.get('customerId') || '');
+    const token = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    if (!customerId) {
+      res.writeHead(400, { 'Content-Type': 'text/plain' });
+      return res.end('customerId query parameter is required.');
+    }
+    if (!orgLibrary.adminTokenOk(customerId, token)) {
+      log(`org-knowledge admin DENIED for ${customerId} from ${req.socket.remoteAddress}`);
+      res.writeHead(401, { 'Content-Type': 'text/plain' });
+      return res.end('Unauthorised. Ask Alpha Web / your Resolve operator for this org\'s admin token.');
+    }
+    const json = (obj, code = 200) => {
+      res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify(obj));
+    };
+    try {
+      if (route === '/admin/knowledge' && req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return fs.createReadStream(ADMIN_KNOWLEDGE_FILE).pipe(res);
+      }
+      if (route === '/api/admin/knowledge' && req.method === 'GET') {
+        return json({
+          customerId,
+          usage: orgKb.usage(customerId),
+          documents: orgKb.listDocuments(customerId),
+        });
+      }
+      if (route === '/api/admin/knowledge' && req.method === 'POST') {
+        // Ingestion is CPU-bound on a shared-cpu machine, so the upload cap is
+        // enforced while reading rather than after buffering the whole thing.
+        const body = await readLargeJsonBody(req, orgKb.MAX_UPLOAD_BYTES * 1.4);
+        const result = await orgKb.addDocument(customerId, body);
+        if (!result.ok) return json({ error: result.error }, 400);
+        audit({ event: 'org_kb_added', customerId, docId: result.doc.docId,
+                title: result.doc.title, chunks: result.doc.chunks });
+        log(`org knowledge: ${customerId} added "${result.doc.title}" (${result.doc.chunks} sections)`);
+        return json({ ok: true, document: result.doc, usage: orgKb.usage(customerId) });
+      }
+      if (route === '/api/admin/knowledge' && req.method === 'DELETE') {
+        const docId = url.searchParams.get('docId') || (await readJsonBody(req)).docId;
+        const result = orgKb.removeDocument(customerId, docId);
+        if (!result.ok) return json({ error: result.error }, 404);
+        audit({ event: 'org_kb_removed', customerId, docId });
+        return json({ ok: true, usage: orgKb.usage(customerId) });
       }
       res.writeHead(405).end('Method not allowed');
       return;
@@ -1278,6 +1387,7 @@ const httpServer = http.createServer(async (req, res) => {
         customerId: issued.customerId,
         token: issued.token,
         adminUrl: `/admin/software?customerId=${encodeURIComponent(issued.customerId)}&token=${encodeURIComponent(issued.token)}`,
+        knowledgeUrl: `/admin/knowledge?customerId=${encodeURIComponent(issued.customerId)}&token=${encodeURIComponent(issued.token)}`,
         created: issued.created,
       }));
     } catch (e) {

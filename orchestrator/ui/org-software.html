@@ -92,7 +92,7 @@
     <div id="list"></div>
   </div>
 </main>
-<footer>Only people with this organisation’s admin link can change the library. End-user paperclip attachments cannot unlock installs.</footer>
+<footer>Only people with this organisation’s admin link can change the library. End-user paperclip attachments cannot unlock installs.<span id="kbLink"></span></footer>
 <script>
 const qs = new URLSearchParams(location.search);
 const customerId = qs.get('customerId') || '';
@@ -103,6 +103,17 @@ const formMsg = document.getElementById('formMsg');
 const settingsMsg = document.getElementById('settingsMsg');
 const allowFull = document.getElementById('allowFullItSupport');
 meta.textContent = customerId ? ('Org: ' + customerId) : 'missing customerId';
+
+// The other half of the same admin link: this page decides what Resolve may
+// INSTALL, the documentation page decides what it KNOWS. Same token, so an
+// admin who reached one should not have to be sent the other separately.
+if (customerId && token) {
+  const k = new URL('/admin/knowledge', location.origin);
+  k.searchParams.set('customerId', customerId);
+  k.searchParams.set('token', token);
+  document.getElementById('kbLink').innerHTML =
+    ' · <a href="' + k.pathname + k.search + '" style="color:var(--blue);font-weight:700">Your documentation</a>';
+}
 
 const api = (path, opts={}) => {
   const u = new URL(path, location.origin);

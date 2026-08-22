@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AWI Resolve — Your Documentation</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{--blue:#00aeef;--magenta:#ad208e;--green:#9ccb3b;--orange:#f47521;
+        --navy:#15213b;--ink:#1c2333;--muted:#5b667d;--line:#e6e9f0;--surface:#f6f8fc;
+        --grad:linear-gradient(100deg,var(--blue),var(--magenta) 55%,var(--orange));}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Plus Jakarta Sans",Segoe UI,system-ui,sans-serif;background:var(--surface);color:var(--ink);line-height:1.55}
+  header{display:flex;align-items:center;gap:14px;padding:16px 26px;background:#fff;border-bottom:1px solid var(--line)}
+  .brand{display:flex;flex-direction:column;line-height:1}
+  .brand strong{font-size:17px;font-weight:800;color:var(--navy)}
+  .brand small{font-size:9px;font-weight:700;letter-spacing:.22em;text-transform:uppercase;color:var(--orange);margin-top:3px}
+  .title{margin-left:12px;padding-left:14px;border-left:1px solid var(--line);font-weight:700;font-size:14px}
+  .title .g{background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .meta{margin-left:auto;font-size:12px;color:var(--muted);font-weight:600}
+  main{padding:24px 26px;max-width:920px;margin:0 auto;display:grid;gap:18px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;box-shadow:0 10px 30px rgba(21,33,59,.06)}
+  h2{margin:0 0 6px;font-size:16px;color:var(--navy)}
+  p.help{margin:0 0 14px;font-size:13px;color:var(--muted)}
+  label{display:block;font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin:12px 0 6px}
+  input{width:100%;font:inherit;font-size:14px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--surface);color:var(--ink)}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  button{font:inherit;font-weight:700;border:0;border-radius:10px;padding:11px 18px;cursor:pointer}
+  .primary{background:var(--orange);color:#fff;margin-top:14px}
+  .primary:disabled{opacity:.55;cursor:default}
+  .ghost{background:#fff;border:1px solid var(--line);color:var(--muted);padding:7px 12px;font-size:12.5px}
+  .ghost.danger{color:#d1554f;border-color:#f5c6c2}
+  a.ghost{text-decoration:none;display:inline-block}
+
+  /* Drop zone. A big obvious target: the person using this is an IT admin with
+     a folder of PDFs, not someone who wants to fill in a form per file. */
+  .drop{border:2px dashed #cfd6e4;border-radius:14px;padding:26px;text-align:center;background:var(--surface);
+        cursor:pointer;transition:.15s}
+  .drop:hover,.drop.over{border-color:var(--blue);background:#eef8fe}
+  .drop strong{display:block;font-size:15px;color:var(--navy);margin-bottom:4px}
+  .drop span{font-size:12.5px;color:var(--muted)}
+
+  .bar{height:8px;border-radius:999px;background:var(--line);overflow:hidden;margin:10px 0 6px}
+  .bar i{display:block;height:100%;background:var(--green);border-radius:999px}
+  .bar.warn i{background:var(--orange)}
+  .bar.full i{background:#d1554f}
+  .barcap{font-size:12px;color:var(--muted);font-weight:600}
+
+  .doc{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-top:10px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+  .doc strong{font-size:14.5px}
+  .doc .sub{font-size:12px;color:var(--muted);width:100%}
+  .doc .spacer{margin-left:auto}
+  .tag{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:3px 9px;border-radius:999px;background:rgba(0,174,239,.14);color:#0b6f93}
+  .empty{font-size:13px;color:var(--muted);padding:14px 0}
+  .msg{font-size:13px;font-weight:600;margin-top:10px;min-height:18px}
+  .msg.err{color:#d1554f} .msg.ok{color:#3d6b12}
+  .queue{font-size:12.5px;color:var(--muted);margin-top:8px}
+  footer{max-width:920px;margin:0 auto;padding:8px 26px 30px;font-size:11.5px;color:var(--muted)}
+  @media(max-width:700px){.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
+  <span class="title"><span class="g">AWI Resolve</span> · Your Documentation</span>
+  <span class="meta" id="meta">loading…</span>
+</header>
+<main>
+  <div class="card">
+    <h2>Teach Resolve about your technology</h2>
+    <p class="help">
+      Upload the manuals, runbooks and configuration guides for the products your estate actually runs.
+      Resolve searches them before answering, and cites the document and page it took an answer from —
+      so it gives your team the setting from <em>your</em> manual instead of a plausible guess.
+      This is permanent: it survives restarts and updates, and it is private to your organisation.
+    </p>
+
+    <div class="drop" id="drop">
+      <strong>Drop manuals here, or click to choose files</strong>
+      <span>PDF, TXT, MD or LOG · up to 30 MB each</span>
+    </div>
+    <input type="file" id="file" multiple accept=".pdf,.txt,.md,.log,application/pdf,text/plain" hidden />
+
+    <div class="row">
+      <div>
+        <label for="tag">Product tag (optional)</label>
+        <input id="tag" placeholder="e.g. kyocera, sap, tally" />
+      </div>
+      <div>
+        <label for="title">Title (optional — defaults to the file name)</label>
+        <input id="title" placeholder="e.g. Kyocera TASKalfa admin guide" />
+      </div>
+    </div>
+
+    <div class="queue" id="queue"></div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h2>Storage</h2>
+    <p class="help">
+      Only the text of each document is kept — the original file is read and then discarded,
+      so a large PDF takes very little of your allowance.
+    </p>
+    <div class="bar" id="bar"><i id="barFill" style="width:0%"></i></div>
+    <div class="barcap" id="barCap">—</div>
+  </div>
+
+  <div class="card">
+    <h2>Documents Resolve can read <span id="count" style="color:var(--muted);font-weight:600"></span></h2>
+    <p class="help">Remove anything out of date — a superseded manual is worse than none, because Resolve will quote it.</p>
+    <div id="list"><div class="empty">Nothing uploaded yet.</div></div>
+  </div>
+</main>
+<footer>
+  Private to your organisation. Nothing here is shared with other Alpha Web customers.
+  <span id="softwareLink"></span>
+</footer>
+
+<script>
+const qs = new URLSearchParams(location.search);
+const customerId = qs.get('customerId') || '';
+const token = qs.get('token') || '';
+
+const $ = (id) => document.getElementById(id);
+$('meta').textContent = customerId ? ('Org: ' + customerId) : 'missing customerId';
+if (customerId && token) {
+  const u = new URL('/admin/software', location.origin);
+  u.searchParams.set('customerId', customerId);
+  u.searchParams.set('token', token);
+  $('softwareLink').innerHTML = ' · <a class="ghost" style="padding:2px 8px" href="' + u.pathname + u.search + '">Approved software library</a>';
+}
+
+function api(pathname, opts = {}) {
+  const u = new URL(pathname, location.origin);
+  u.searchParams.set('customerId', customerId);
+  u.searchParams.set('token', token);
+  return fetch(u, { headers: { 'Content-Type': 'application/json' }, ...opts })
+    .then(async (r) => {
+      const j = await r.json().catch(() => ({ error: 'the service returned an unreadable response' }));
+      if (j.error) throw new Error(j.error);
+      return j;
+    });
+}
+
+function show(ok, text) {
+  $('msg').className = 'msg ' + (ok ? 'ok' : 'err');
+  $('msg').textContent = text || '';
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+}
+
+function renderUsage(u) {
+  const pct = Math.min(100, u.percentUsed || 0);
+  $('bar').className = 'bar' + (pct >= 90 ? ' full' : (pct >= 70 ? ' warn' : ''));
+  $('barFill').style.width = pct + '%';
+  $('barCap').textContent =
+    fmtBytes(u.textBytes) + ' of ' + fmtBytes(u.maxTextBytes) + ' used · '
+    + u.documents + ' of ' + u.maxDocuments + ' documents · '
+    + u.chunks + ' searchable sections';
+}
+
+function renderDocs(docs) {
+  $('count').textContent = docs.length ? '(' + docs.length + ')' : '';
+  if (!docs.length) { $('list').innerHTML = '<div class="empty">Nothing uploaded yet.</div>'; return; }
+  $('list').innerHTML = docs.map((d) => {
+    const when = new Date(d.addedAt).toLocaleDateString(undefined, { day:'numeric', month:'short', year:'numeric' });
+    return '<div class="doc">'
+      + '<strong>' + esc(d.title) + '</strong>'
+      + (d.tag ? '<span class="tag">' + esc(d.tag) + '</span>' : '')
+      + '<span class="spacer"></span>'
+      + '<button class="ghost danger" data-id="' + esc(d.docId) + '">Remove</button>'
+      + '<span class="sub">' + d.pages + ' page' + (d.pages === 1 ? '' : 's') + ' · '
+      + d.chunks + ' searchable section' + (d.chunks === 1 ? '' : 's') + ' · '
+      + fmtBytes(d.textBytes) + ' · added ' + when + '</span>'
+      + '</div>';
+  }).join('');
+  $('list').querySelectorAll('button[data-id]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Remove this document? Resolve will stop using it immediately.')) return;
+      b.disabled = true;
+      try {
+        await api('/api/admin/knowledge?docId=' + encodeURIComponent(b.dataset.id), { method: 'DELETE' });
+        show(true, 'Removed.');
+        await refresh();
+      } catch (e) { show(false, e.message); b.disabled = false; }
+    };
+  });
+}
+
+async function refresh() {
+  const j = await api('/api/admin/knowledge');
+  renderUsage(j.usage);
+  renderDocs(j.documents);
+}
+
+// ---- upload ---------------------------------------------------------------
+const drop = $('drop');
+const fileInput = $('file');
+drop.onclick = () => fileInput.click();
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); handle([...e.dataTransfer.files]); };
+fileInput.onchange = () => { handle([...fileInput.files]); fileInput.value = ''; };
+
+function readFile(f) {
+  return new Promise((resolve, reject) => {
+    const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+    const r = new FileReader();
+    r.onerror = () => reject(new Error('could not read ' + f.name));
+    r.onload = () => {
+      if (isPdf) {
+        const bytes = new Uint8Array(r.result);
+        let bin = '';
+        // Chunked so a large file does not blow the argument limit on apply().
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        resolve({ encoding: 'pdf-base64', data: btoa(bin) });
+      } else {
+        resolve({ encoding: 'text', data: r.result });
+      }
+    };
+    if (isPdf) r.readAsArrayBuffer(f); else r.readAsText(f);
+  });
+}
+
+// Uploaded one at a time on purpose. Parsing a manual is CPU-bound on a small
+// machine, and firing ten at once would starve the live support sessions this
+// same service is running.
+async function handle(files) {
+  if (!files.length) return;
+  const tag = $('tag').value.trim();
+  const titleOverride = $('title').value.trim();
+  let done = 0;
+  show(true, '');
+  for (const f of files) {
+    $('queue').textContent = 'Reading ' + f.name + '… (' + (done + 1) + ' of ' + files.length + ')';
+    try {
+      const payload = await readFile(f);
+      const title = (files.length === 1 && titleOverride) || f.name.replace(/\.[^.]+$/, '');
+      const j = await api('/api/admin/knowledge', {
+        method: 'POST',
+        body: JSON.stringify({ title, tag, ...payload }),
+      });
+      renderUsage(j.usage);
+      done++;
+      show(true, 'Added "' + j.document.title + '" — ' + j.document.chunks + ' searchable sections. Resolve can use it now.');
+    } catch (e) {
+      show(false, f.name + ': ' + e.message);
+    }
+  }
+  $('queue').textContent = '';
+  $('title').value = '';
+  await refresh().catch(() => {});
+}
+
+if (!customerId || !token) {
+  show(false, 'This page needs a customerId and token in the address. Ask Alpha Web for your organisation’s admin link.');
+} else {
+  refresh().catch((e) => show(false, e.message));
+}
+</script>
+</body>
+</html>
