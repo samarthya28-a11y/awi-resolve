@@ -65,7 +65,7 @@ const SIGNING_KEY = process.env.RESOLVE_LICENCE_SIGNING_KEY || '';
 const PORT = Number(process.env.PORT || process.env.RESOLVE_PORT || 8787);
 const { DATA_DIR } = require('./paths');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
-const AUDIT_FILE = path.join(DATA_DIR, 'audit.jsonl');
+const auditLog = require('./audit-log');
 const REPORT_FILE = path.join(DATA_DIR, 'demo-report.json');
 const DIAGNOSIS_FILE = path.join(DATA_DIR, 'diagnosis.json');
 const ESCALATION_FILE = path.join(DATA_DIR, 'escalation.json');
@@ -89,8 +89,12 @@ function saveDevices(devices) {
 }
 
 // Black-box recorder: one line per event, append-only (spec §5.2 audit log).
+// Appending, rolling and reading the trail all live in audit-log.js. The file
+// shares a 1 GB volume with ledger.json, so it is capped and rolled there — an
+// audit file that grows without limit ends as a ticket debit that cannot be
+// written, which is billing breaking rather than logging stopping.
 function audit(event) {
-  fs.appendFileSync(AUDIT_FILE, JSON.stringify({ ts: new Date().toISOString(), ...event }) + '\n');
+  auditLog.record(event);
 }
 
 const pendingCalls = new Map(); // callId -> resolve()
@@ -1117,6 +1121,46 @@ const httpServer = http.createServer(async (req, res) => {
     } catch (e) {
       return json({ error: e.message }, 400);
     }
+  }
+
+  // Read the audit trail. Two ways in, and the difference is what you may see.
+  //
+  // An organisation's own admin token returns that organisation's events and
+  // nothing else — not another customer's, and not the service-level entries
+  // that belong to no organisation. Alpha Web's dashboard token may read across
+  // everything, which is what an incident actually needs.
+  if (route === '/api/admin/audit' && req.method === 'GET') {
+    const asked = url.searchParams.get('customerId') || '';
+    const customerId = asked ? orgLibrary.slugify(asked) : '';
+    const supplied = url.searchParams.get('token') ||
+      (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+
+    const asOperator = tokenOk(supplied);
+    const asOrg = Boolean(customerId) && orgLibrary.adminTokenOk(customerId, supplied);
+    if (!asOperator && !asOrg) {
+      audit({ event: 'org_admin_denied', page: 'audit', customerId: customerId || null,
+              ip: req.socket.remoteAddress });
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Unauthorised' }));
+    }
+
+    // Scope is decided by the CREDENTIAL, never by the request. An org token
+    // cannot widen its own view by leaving customerId off.
+    const scope = asOrg ? customerId : (customerId || null);
+    const entries = auditLog.read({
+      customerId: scope,
+      limit: url.searchParams.get('limit'),
+      since: url.searchParams.get('since'),
+      event: url.searchParams.get('event'),
+    });
+    if (asOrg) audit({ event: 'audit_viewed', customerId });
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({
+      customerId: scope,
+      count: entries.length,
+      entries,
+      ...(asOperator && !customerId ? { storage: auditLog.stats() } : {}),
+    }));
   }
 
   // Rotate an organisation's access token. Authorised with the CURRENT token,
