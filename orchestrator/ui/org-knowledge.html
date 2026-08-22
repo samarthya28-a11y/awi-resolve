@@ -52,6 +52,9 @@
   .doc .spacer{margin-left:auto}
   .tag{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;padding:3px 9px;border-radius:999px;background:rgba(0,174,239,.14);color:#0b6f93}
   .empty{font-size:13px;color:var(--muted);padding:14px 0}
+  .signin{max-width:420px}
+  .signin .muted{font-size:13px;color:var(--muted);margin:0 0 4px}
+  .who{margin-left:auto;display:flex;align-items:center;gap:10px}
   .msg{font-size:13px;font-weight:600;margin-top:10px;min-height:18px}
   .msg.err{color:#d1554f} .msg.ok{color:#3d6b12}
   .queue{font-size:12.5px;color:var(--muted);margin-top:8px}
@@ -63,9 +66,25 @@
 <header>
   <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
   <span class="title"><span class="g">AWI Resolve</span> · Your Documentation</span>
-  <span class="meta" id="meta">loading…</span>
+  <span class="who"><span class="meta" id="meta">loading…</span><button class="ghost" id="signout" hidden>Sign out</button></span>
 </header>
 <main>
+  <!-- Sign-in. The address we email carries no credential, so this is where the
+       organisation id and token are entered. Keeping them out of the URL keeps
+       them out of the customer's mailbox, their browser history, and anything
+       they forward. -->
+  <div class="card signin" id="signin" hidden>
+    <h2>Sign in</h2>
+    <p class="muted">Use the organisation id and access token Alpha Web sent you.</p>
+    <label for="inOrg">Organisation id</label>
+    <input id="inOrg" placeholder="e.g. acme-mfg" autocomplete="off" />
+    <label for="inTok">Access token</label>
+    <input id="inTok" type="password" placeholder="paste your token" autocomplete="off" />
+    <button class="primary" id="go">Open my documentation</button>
+    <div class="msg" id="signinMsg"></div>
+  </div>
+
+  <div id="work" hidden>
   <div class="card">
     <h2>Teach Resolve about your technology</h2>
     <p class="help">
@@ -111,6 +130,7 @@
     <p class="help">Remove anything out of date — a superseded manual is worse than none, because Resolve will quote it.</p>
     <div id="list"><div class="empty">Nothing uploaded yet.</div></div>
   </div>
+  </div>
 </main>
 <footer>
   Private to your organisation. Nothing here is shared with other Alpha Web customers.
@@ -118,30 +138,89 @@
 </footer>
 
 <script>
-const qs = new URLSearchParams(location.search);
-const customerId = qs.get('customerId') || '';
-const token = qs.get('token') || '';
-
 const $ = (id) => document.getElementById(id);
-$('meta').textContent = customerId ? ('Org: ' + customerId) : 'missing customerId';
-if (customerId && token) {
-  const u = new URL('/admin/software', location.origin);
-  u.searchParams.set('customerId', customerId);
-  u.searchParams.set('token', token);
-  $('softwareLink').innerHTML = ' · <a class="ghost" style="padding:2px 8px" href="' + u.pathname + u.search + '">Approved software library</a>';
+
+// Credentials live for this browser tab only — never localStorage. A shared or
+// kiosk PC must not leave an organisation's token behind after the tab closes.
+const S = sessionStorage;
+let customerId = '';
+let token = '';
+
+// A link that still carries credentials (older emails, a bookmark) keeps
+// working, but they are moved out of the address bar immediately so they stop
+// accumulating in history and stop being copied out of the URL bar.
+const qs = new URLSearchParams(location.search);
+if (qs.get('customerId') && qs.get('token')) {
+  customerId = qs.get('customerId');
+  token = qs.get('token');
+  S.setItem('kbOrg', customerId);
+  S.setItem('kbTok', token);
+  history.replaceState(null, '', location.pathname);
+} else {
+  customerId = S.getItem('kbOrg') || '';
+  token = S.getItem('kbTok') || '';
 }
 
 function api(pathname, opts = {}) {
   const u = new URL(pathname, location.origin);
   u.searchParams.set('customerId', customerId);
-  u.searchParams.set('token', token);
-  return fetch(u, { headers: { 'Content-Type': 'application/json' }, ...opts })
+  // The token travels in the header, not the query string: query strings end up
+  // in proxy and server logs, and this one is a live credential.
+  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
+  return fetch(u, { headers, ...opts, ...(opts.headers ? { headers: { ...headers, ...opts.headers } } : {}) })
     .then(async (r) => {
+      if (r.status === 401) { signOut('That organisation id and token were not accepted.'); throw new Error('not authorised'); }
       const j = await r.json().catch(() => ({ error: 'the service returned an unreadable response' }));
       if (j.error) throw new Error(j.error);
       return j;
     });
 }
+
+function showSignedIn() {
+  $('signin').hidden = true;
+  $('work').hidden = false;
+  $('signout').hidden = false;
+  $('meta').textContent = 'Org: ' + customerId;
+  const k = new URL('/admin/software', location.origin);
+  $('softwareLink').innerHTML =
+    ' · <a class="ghost" style="padding:2px 8px" href="' + k.pathname + '">Approved software library</a>';
+}
+
+function showSignIn(message) {
+  $('signin').hidden = false;
+  $('work').hidden = true;
+  $('signout').hidden = true;
+  $('meta').textContent = 'not signed in';
+  if (message) { $('signinMsg').className = 'msg err'; $('signinMsg').textContent = message; }
+}
+
+function signOut(message) {
+  S.removeItem('kbOrg'); S.removeItem('kbTok');
+  customerId = ''; token = '';
+  showSignIn(message);
+}
+
+$('signout').onclick = () => signOut('');
+
+$('go').onclick = async () => {
+  const org = $('inOrg').value.trim();
+  const tok = $('inTok').value.trim();
+  if (!org || !tok) { $('signinMsg').className = 'msg err'; $('signinMsg').textContent = 'Both fields are needed.'; return; }
+  customerId = org; token = tok;
+  $('signinMsg').className = 'msg'; $('signinMsg').textContent = 'Checking…';
+  try {
+    await refresh();
+    S.setItem('kbOrg', org); S.setItem('kbTok', tok);
+    $('inTok').value = '';
+    $('signinMsg').textContent = '';
+    showSignedIn();
+  } catch (e) {
+    customerId = ''; token = '';
+    $('signinMsg').className = 'msg err';
+    $('signinMsg').textContent = e.message === 'not authorised' ? 'That organisation id and token were not accepted.' : e.message;
+  }
+};
+$('inTok').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
 
 function show(ok, text) {
   $('msg').className = 'msg ' + (ok ? 'ok' : 'err');
@@ -264,9 +343,9 @@ async function handle(files) {
 }
 
 if (!customerId || !token) {
-  show(false, 'This page needs a customerId and token in the address. Ask Alpha Web for your organisation’s admin link.');
+  showSignIn('');
 } else {
-  refresh().catch((e) => show(false, e.message));
+  refresh().then(showSignedIn).catch((e) => showSignIn(e.message === 'not authorised' ? '' : e.message));
 }
 </script>
 </body>

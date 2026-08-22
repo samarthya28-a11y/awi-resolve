@@ -47,9 +47,26 @@
 <header>
   <span class="brand"><strong>Alpha Web</strong><small>Innovations</small></span>
   <span class="title"><span class="g">AWI Resolve</span> · Approved Software Library</span>
-  <span class="meta" id="meta">loading…</span>
+  <span style="margin-left:auto;display:flex;align-items:center;gap:10px">
+    <span class="meta" id="meta">loading…</span>
+    <button class="ghost" id="signout" hidden>Sign out</button>
+  </span>
 </header>
 <main>
+  <!-- Sign-in. The emailed address carries no credential, so it is entered
+       here — keeping the token out of the customer's mailbox, their browser
+       history, and anything they forward on. -->
+  <div class="card" id="signin" style="max-width:420px" hidden>
+    <h2>Sign in</h2>
+    <p class="help">Use the organisation id and access token Alpha Web sent you.</p>
+    <label for="inOrg">Organisation id</label>
+    <input id="inOrg" placeholder="e.g. acme-mfg" autocomplete="off" />
+    <label for="inTok">Access token</label>
+    <input id="inTok" type="password" placeholder="paste your token" autocomplete="off" />
+    <button class="primary" id="go">Open my library</button>
+    <div class="msg" id="signinMsg"></div>
+  </div>
+  <div id="work" hidden>
   <div class="card">
     <h2>Organisation settings</h2>
     <p class="help">Full IT Support lets Resolve run consented PowerShell for legitimate IT work beyond the fixed allowlist.
@@ -91,36 +108,95 @@
     <p class="help">Disabled packages stay in the library but cannot be installed by Resolve.</p>
     <div id="list"></div>
   </div>
+  </div>
 </main>
 <footer>Only people with this organisation’s admin link can change the library. End-user paperclip attachments cannot unlock installs.<span id="kbLink"></span></footer>
 <script>
+// Credentials live for this browser tab only — never localStorage, so a shared
+// or kiosk PC does not keep an organisation's token after the tab closes.
+const S = sessionStorage;
+let customerId = '';
+let token = '';
+
+// Links that still carry credentials keep working, but they are stripped from
+// the address bar at once so they stop accumulating in browser history.
 const qs = new URLSearchParams(location.search);
-const customerId = qs.get('customerId') || '';
-const token = qs.get('token') || '';
+if (qs.get('customerId') && qs.get('token')) {
+  customerId = qs.get('customerId');
+  token = qs.get('token');
+  S.setItem('kbOrg', customerId);
+  S.setItem('kbTok', token);
+  history.replaceState(null, '', location.pathname);
+} else {
+  customerId = S.getItem('kbOrg') || '';
+  token = S.getItem('kbTok') || '';
+}
 const meta = document.getElementById('meta');
 const list = document.getElementById('list');
 const formMsg = document.getElementById('formMsg');
 const settingsMsg = document.getElementById('settingsMsg');
 const allowFull = document.getElementById('allowFullItSupport');
-meta.textContent = customerId ? ('Org: ' + customerId) : 'missing customerId';
-
 // The other half of the same admin link: this page decides what Resolve may
-// INSTALL, the documentation page decides what it KNOWS. Same token, so an
-// admin who reached one should not have to be sent the other separately.
-if (customerId && token) {
-  const k = new URL('/admin/knowledge', location.origin);
-  k.searchParams.set('customerId', customerId);
-  k.searchParams.set('token', token);
+// INSTALL, the documentation page decides what it KNOWS. One token opens both,
+// and the session carries it across, so no credential goes in the href.
+function showSignedIn() {
+  document.getElementById('signin').hidden = true;
+  document.getElementById('work').hidden = false;
+  document.getElementById('signout').hidden = false;
+  meta.textContent = 'Org: ' + customerId;
   document.getElementById('kbLink').innerHTML =
-    ' · <a href="' + k.pathname + k.search + '" style="color:var(--blue);font-weight:700">Your documentation</a>';
+    ' · <a href="/admin/knowledge" style="color:var(--blue);font-weight:700">Your documentation</a>';
 }
+
+function showSignIn(message) {
+  document.getElementById('signin').hidden = false;
+  document.getElementById('work').hidden = true;
+  document.getElementById('signout').hidden = true;
+  meta.textContent = 'not signed in';
+  const m = document.getElementById('signinMsg');
+  if (message) { m.className = 'msg err'; m.textContent = message; }
+}
+
+function signOut(message) {
+  S.removeItem('kbOrg'); S.removeItem('kbTok');
+  customerId = ''; token = '';
+  showSignIn(message);
+}
+
+document.getElementById('signout').onclick = () => signOut('');
+
+document.getElementById('go').onclick = async () => {
+  const org = document.getElementById('inOrg').value.trim();
+  const tok = document.getElementById('inTok').value.trim();
+  const m = document.getElementById('signinMsg');
+  if (!org || !tok) { m.className = 'msg err'; m.textContent = 'Both fields are needed.'; return; }
+  customerId = org; token = tok;
+  m.className = 'msg'; m.textContent = 'Checking…';
+  try {
+    await refresh();
+    S.setItem('kbOrg', org); S.setItem('kbTok', tok);
+    document.getElementById('inTok').value = '';
+    m.textContent = '';
+    showSignedIn();
+  } catch (e) {
+    customerId = ''; token = '';
+    m.className = 'msg err';
+    m.textContent = e.message === 'not authorised' ? 'That organisation id and token were not accepted.' : e.message;
+  }
+};
+document.getElementById('inTok').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('go').click();
+});
 
 const api = (path, opts={}) => {
   const u = new URL(path, location.origin);
   u.searchParams.set('customerId', customerId);
-  u.searchParams.set('token', token);
-  return fetch(u, { headers: { 'Content-Type': 'application/json' }, ...opts })
+  // Header, not query string: a query string is written to proxy and server
+  // logs, and this one is a live credential.
+  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token };
+  return fetch(u, { headers, ...opts, ...(opts.headers ? { headers: { ...headers, ...opts.headers } } : {}) })
     .then(async r => {
+      if (r.status === 401) { signOut('That organisation id and token were not accepted.'); throw new Error('not authorised'); }
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
       return j;
@@ -156,11 +232,7 @@ async function refresh(){
   });
   list.querySelectorAll('[data-del]').forEach(btn => btn.onclick = async () => {
     if (!confirm('Remove this package from the approved library?')) return;
-    const u = new URL('/api/admin/software', location.origin);
-    u.searchParams.set('customerId', customerId);
-    u.searchParams.set('token', token);
-    u.searchParams.set('productId', btn.dataset.del);
-    await fetch(u, { method:'DELETE' }).then(r => r.json()).then(j => { if (j.error) throw new Error(j.error); });
+    await api('/api/admin/software?productId=' + encodeURIComponent(btn.dataset.del), { method:'DELETE' });
     refresh();
   });
 }
@@ -208,7 +280,11 @@ document.getElementById('save').onclick = async () => {
   }
 };
 
-refresh().catch(e => { list.innerHTML = '<p class="msg err">' + esc(e.message) + '</p>'; });
+if (!customerId || !token) {
+  showSignIn('');
+} else {
+  refresh().then(showSignedIn).catch(e => showSignIn(e.message === 'not authorised' ? '' : e.message));
+}
 </script>
 </body>
 </html>

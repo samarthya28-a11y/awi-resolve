@@ -977,6 +977,16 @@ const httpServer = http.createServer(async (req, res) => {
     const customerId = orgLibrary.slugify(url.searchParams.get('customerId') || '');
     const token = url.searchParams.get('token') ||
       (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    // The PAGE carries no data — it is an empty shell that asks for the
+    // organisation id and token. Serving it unauthenticated is what lets us
+    // email a customer a plain address instead of a link with their credential
+    // baked into it, which would sit in their mailbox and browser history and
+    // work for anyone they forwarded it to. Every /api/ route below still
+    // demands the token.
+    if (route === '/admin/software' && req.method === 'GET' && !token) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return fs.createReadStream(ADMIN_SOFTWARE_FILE).pipe(res);
+    }
     if (!customerId) {
       res.writeHead(400, { 'Content-Type': 'text/plain' });
       return res.end('customerId query parameter is required.');
@@ -1047,6 +1057,13 @@ const httpServer = http.createServer(async (req, res) => {
     const customerId = orgLibrary.slugify(url.searchParams.get('customerId') || '');
     const token = url.searchParams.get('token') ||
       (req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    // Served before the gate, for the same reason as the software library
+    // above: the emailed address must open, and the credential is pasted into
+    // the page rather than carried in the URL.
+    if (route === '/admin/knowledge' && req.method === 'GET' && !token) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      return fs.createReadStream(ADMIN_KNOWLEDGE_FILE).pipe(res);
+    }
     if (!customerId) {
       res.writeHead(400, { 'Content-Type': 'text/plain' });
       return res.end('customerId query parameter is required.');
