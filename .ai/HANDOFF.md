@@ -35,8 +35,12 @@ half live, and `main` matches the deployed connector image.
   TRACKED (`2553ba0`) so GitHub holds a copy independent of OneDrive.
 - Safekeep mirrors `C:UsersASUSProjects` into OneDrive, current to the
   minute, and DOES capture the gitignored `tools/licensing-key.pem` and `.env`.
-- It keeps ONE copy per path — no version history. A ransomware run would be
-  mirrored over the good copies; OneDrive's own file versions are the backstop.
+- It keeps ONE copy per path — no version history of its own. OneDrive's file
+  versions are the backstop, and that was VERIFIED end to end on 2026-08-23: a
+  mirrored file was overwritten with garbage and fully recovered. The cloud
+  restore lands as a NEW version and takes ~90s to reach the machine — during
+  which the local file still looks wrong. Do not conclude a restore failed too
+  early.
 - The signing key also lives as the Fly secret `RESOLVE_LICENCE_SIGNING_KEY`
   (verified: same key). Fly secrets cannot be read back, so licences could still
   be ISSUED via the website after a laptop loss, but the key could not be
